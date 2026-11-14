@@ -2,7 +2,11 @@ package com.tvhome
 
 import android.app.Activity
 import android.app.Dialog
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.IntentFilter
+import android.content.pm.PackageInstaller
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ResolveInfo
@@ -38,36 +42,50 @@ private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 // How many HDMI cards to always show
 private const val HDMI_COUNT = 3
+// GitHub repo that holds your releases
+private const val REPO = "zezo20234/tv"
+private const val ACTION_INSTALL = "com.tvhome.app.INSTALL_RESULT"
 
 // ======================= Custom views (all cheap to draw) =======================
 
-/** Static dark cinematic background (drawn once, never animated: keeps D-pad smooth). */
+/** Dark cinematic mesh gradient, pre-rendered once into a small bitmap (one cheap blit per frame). */
 class StaticBackground(ctx: Context) : View(ctx) {
-    private val base = Paint().apply { color = 0xFF05070D.toInt() }
-    private val blobs = ArrayList<Pair<Paint, FloatArray>>()
+    private var bmp: Bitmap? = null
+    private val dst = Rect()
+    private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
 
-    private fun blob(color: Int, alpha: Int, r: Float): Paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        shader = RadialGradient(0f, 0f, r, intArrayOf(
+    private fun blob(c: Canvas, cx: Float, cy: Float, r: Float, color: Int, alpha: Int) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.shader = RadialGradient(cx, cy, r, intArrayOf(
             Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color)),
             Color.argb(0, Color.red(color), Color.green(color), Color.blue(color))
         ), null, Shader.TileMode.CLAMP)
+        c.drawCircle(cx, cy, r, p)
     }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
-        blobs.clear()
-        val m = max(w, h).toFloat()
-        blobs.add(Pair(blob(0xFF1E40AF.toInt(), 150, m * 0.7f), floatArrayOf(w * 0.12f, h * 0.05f, m * 0.7f)))
-        blobs.add(Pair(blob(0xFF6D28D9.toInt(), 105, m * 0.55f), floatArrayOf(w * 0.92f, h * 0.30f, m * 0.55f)))
-        blobs.add(Pair(blob(0xFF0F766E.toInt(), 100, m * 0.65f), floatArrayOf(w * 0.50f, h * 1.00f, m * 0.65f)))
+        val bw = max(8, w / 3); val bh = max(8, h / 3)
+        val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
+        val c = Canvas(b)
+        c.drawColor(0xFF05070D.toInt())
+        val m = max(bw, bh).toFloat()
+        blob(c, bw * 0.12f, bh * 0.05f, m * 0.70f, 0xFF1E40AF.toInt(), 150)
+        blob(c, bw * 0.92f, bh * 0.30f, m * 0.55f, 0xFF6D28D9.toInt(), 105)
+        blob(c, bw * 0.50f, bh * 1.00f, m * 0.65f, 0xFF0F766E.toInt(), 100)
+        bmp = b
     }
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), base)
-        for ((p, d) in blobs) {
-            canvas.save(); canvas.translate(d[0], d[1]); canvas.drawCircle(0f, 0f, d[2], p); canvas.restore()
-        }
+        val b = bmp ?: return
+        dst.set(0, 0, width, height)
+        canvas.drawBitmap(b, null, dst, paint)
     }
+}
+
+/** Card container: no offscreen layer when dimmed (this was a big source of lag). */
+class CardBox(ctx: Context) : LinearLayout(ctx) {
+    override fun hasOverlappingRendering(): Boolean = false
 }
 
 /** Rounded bitmap without clipToOutline (BitmapShader is much faster on weak TV GPUs). */
@@ -233,6 +251,20 @@ class WeatherView(ctx: Context) : View(ctx) {
     }
 }
 
+class UpdateView(ctx: Context) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = 0xFFFFFFFF.toInt(); strokeCap = Paint.Cap.ROUND
+    }
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat(); val cx = w / 2f
+        p.strokeWidth = h * 0.09f
+        c.drawLine(cx, h * 0.10f, cx, h * 0.62f, p)
+        c.drawLine(cx - w * 0.22f, h * 0.42f, cx, h * 0.64f, p)
+        c.drawLine(cx + w * 0.22f, h * 0.42f, cx, h * 0.64f, p)
+        c.drawLine(w * 0.20f, h * 0.88f, w * 0.80f, h * 0.88f, p)
+    }
+}
+
 // ======================= Activity =======================
 
 class MainActivity : Activity() {
@@ -257,7 +289,6 @@ class MainActivity : Activity() {
     private lateinit var favRow: LinearLayout
     private lateinit var inputsRow: LinearLayout
     private lateinit var appsRow: LinearLayout
-    private lateinit var tint: View
     private lateinit var heroTitle: TextView
     private lateinit var heroSub: TextView
     private lateinit var heroFrame: FrameLayout
@@ -265,14 +296,43 @@ class MainActivity : Activity() {
     private lateinit var heroPort: HdmiPortView
     private lateinit var heroGear: GearView
     private lateinit var weatherText: TextView
+    private lateinit var greeting: TextView
     private lateinit var weatherIcon: WeatherView
     private lateinit var wifi: WifiView
     private lateinit var prefs: SharedPreferences
     private var tim: TvInputManager? = null
     private var lastSig = ""
     @Volatile private var loading = false
-    private var lastWeather = 0L
+    private var lastWeather = -1L
     private var pendingTile: Tile? = null
+    private lateinit var heroUpdate: UpdateView
+    private var lastUpdateCheck = -1L
+    @Volatile private var latestBuild = 0
+    @Volatile private var latestUrl: String? = null
+    private var progressDlg: Dialog? = null
+    private var progressTv: TextView? = null
+    private val myBuild: Int by lazy { currentBuild() }
+
+    private val installReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)) {
+                PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                    hideProgress()
+                    @Suppress("DEPRECATION")
+                    val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                    if (confirm != null) {
+                        confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(confirm)
+                    }
+                }
+                PackageInstaller.STATUS_SUCCESS -> toast("Updated!")
+                else -> {
+                    hideProgress()
+                    toast("Update failed: " + (intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "unknown"))
+                }
+            }
+        }
+    }
 
     private val palette = intArrayOf(
         0xFFE50914.toInt(), 0xFF0A84FF.toInt(), 0xFF8E44AD.toInt(), 0xFF16A085.toInt(),
@@ -285,9 +345,18 @@ class MainActivity : Activity() {
         override fun run() {
             val online = isOnline()
             wifi.on = online
-            if (online && SystemClock.elapsedRealtime() - lastWeather > 15 * 60 * 1000L) {
+            updateGreeting()
+            if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > 15 * 60 * 1000L) {
                 lastWeather = SystemClock.elapsedRealtime()
                 fetchWeather()
+            }
+            if (lastUpdateCheck < 0 || SystemClock.elapsedRealtime() - lastUpdateCheck > 6 * 60 * 60 * 1000L) {
+                lastUpdateCheck = SystemClock.elapsedRealtime()
+                Thread {
+                    if (fetchLatest() && latestBuild > myBuild) {
+                        runOnUiThread { if (currentFocus?.parent !== inputsRow) refreshInputs(0) }
+                    }
+                }.start()
             }
             handler.postDelayed(this, 5000L)
         }
@@ -313,8 +382,6 @@ class MainActivity : Activity() {
 
         val root = FrameLayout(this)
         root.addView(StaticBackground(this), MATCH, MATCH)
-        tint = View(this)
-        root.addView(tint, FrameLayout.LayoutParams(MATCH, (H * 0.62f).toInt()))
 
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(buildTopBar(), LinearLayout.LayoutParams(MATCH, WRAP))
@@ -335,7 +402,15 @@ class MainActivity : Activity() {
         col.addView(shelves, LinearLayout.LayoutParams(MATCH, 0, 1f))
         root.addView(col, MATCH, MATCH)
         setContentView(root)
-        applyTint(0xFF1E3A8A.toInt())
+
+        val f = IntentFilter(ACTION_INSTALL)
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(installReceiver, f, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(installReceiver, f)
+    }
+
+    override fun onDestroy() {
+        try { unregisterReceiver(installReceiver) } catch (e: Exception) { }
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -368,32 +443,52 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(padH, u(22f), padH, 0)
         }
-        val left = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        greeting = tv("Hello", 30f, Color.WHITE, true)
+        left.addView(greeting)
+        val wrow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, u(6f), 0, 0) }
         weatherIcon = WeatherView(this)
-        left.addView(weatherIcon, LinearLayout.LayoutParams(u(34f), u(34f)).apply { rightMargin = u(10f) })
-        weatherText = tv("Riyadh", 20f, 0xE6FFFFFF.toInt(), true)
-        left.addView(weatherText)
+        wrow.addView(weatherIcon, LinearLayout.LayoutParams(u(30f), u(30f)).apply { rightMargin = u(10f) })
+        weatherText = tv("Riyadh   loading weather…", 19f, 0xE6FFFFFF.toInt(), true)
+        wrow.addView(weatherText)
+        left.addView(wrow)
         bar.addView(left, LinearLayout.LayoutParams(0, WRAP, 1f))
 
         val right = LinearLayout(this).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
         wifi = WifiView(this)
-        right.addView(wifi, LinearLayout.LayoutParams(u(26f), u(21f)).apply { rightMargin = u(20f) })
+        right.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { rightMargin = u(20f) })
         right.addView(TextClock(this).apply {
-            format12Hour = "h:mm a"; format24Hour = "HH:mm"
-            setTextSize(TypedValue.COMPLEX_UNIT_PX, u(22f).toFloat())
-            setTextColor(0xE6FFFFFF.toInt())
+            format12Hour = "h:mm a"
+            format24Hour = "h:mm a"   // always 12-hour
+            setTextSize(TypedValue.COMPLEX_UNIT_PX, u(28f).toFloat())
+            setTextColor(0xF2FFFFFF.toInt())
+            typeface = Typeface.DEFAULT_BOLD
         })
         bar.addView(right, LinearLayout.LayoutParams(0, WRAP, 1f))
+        updateGreeting()
         return bar
+    }
+
+    private fun updateGreeting() {
+        val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val g = when {
+            h in 5..11 -> "Good morning"
+            h in 12..16 -> "Good afternoon"
+            h in 17..21 -> "Good evening"
+            else -> "Good night"
+        }
+        if (greeting.text.toString() != g) greeting.text = g   // only touch the view when it changes
     }
 
     private fun buildHero(): View {
         val hero = FrameLayout(this).apply { setPadding(padH, 0, padH, 0); clipChildren = false }
 
         val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        heroTitle = tv("", 46f, Color.WHITE, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END; maxWidth = (W * 0.46f).toInt() }
-        heroSub = tv("", 18f, 0xB3FFFFFF.toInt()).apply { setPadding(0, u(6f), 0, 0) }
-        text.addView(heroTitle); text.addView(heroSub)
+        heroTitle = tv("", 46f, Color.WHITE, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        heroSub = tv("", 18f, 0xB3FFFFFF.toInt()).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        val tw = (W * 0.46f).toInt()
+        text.addView(heroTitle, LinearLayout.LayoutParams(tw, u(60f)))
+        text.addView(heroSub, LinearLayout.LayoutParams(tw, u(28f)).apply { topMargin = u(4f) })
         hero.addView(text, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.START).apply { bottomMargin = u(26f) })
 
         val hh = (H * 0.30f * 0.84f).toInt()
@@ -405,6 +500,8 @@ class MainActivity : Activity() {
         heroFrame.addView(heroPort, FrameLayout.LayoutParams((hw * 0.34f).toInt(), (hw * 0.34f * 0.46f).toInt(), Gravity.CENTER))
         heroGear = GearView(this)
         heroFrame.addView(heroGear, FrameLayout.LayoutParams((hh * 0.5f).toInt(), (hh * 0.5f).toInt(), Gravity.CENTER))
+        heroUpdate = UpdateView(this)
+        heroFrame.addView(heroUpdate, FrameLayout.LayoutParams((hh * 0.5f).toInt(), (hh * 0.5f).toInt(), Gravity.CENTER))
         hero.addView(heroFrame, FrameLayout.LayoutParams(hw, hh, Gravity.END or Gravity.CENTER_VERTICAL))
         return hero
     }
@@ -412,9 +509,10 @@ class MainActivity : Activity() {
     private fun applyHero(t: Tile) {
         heroTitle.text = t.title
         heroSub.text = t.subtitle
-        heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.GONE
-        heroPort.visibility = if (t.kind == 1) View.VISIBLE else View.GONE
-        heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.GONE
+        heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
+        heroPort.visibility = if (t.kind == 1) View.VISIBLE else View.INVISIBLE
+        heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
+        heroUpdate.visibility = if (t.kind == 3) View.VISIBLE else View.INVISIBLE
         if (t.kind == 0) {
             heroImg.setBitmap(t.art)
             heroFrame.background = null
@@ -422,13 +520,6 @@ class MainActivity : Activity() {
             heroFrame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 intArrayOf(shade(t.color, 1.3f), shade(t.color, 0.7f))).apply { cornerRadius = dp(22).toFloat() }
         }
-        applyTint(t.color)
-    }
-
-    private fun applyTint(color: Int) {
-        val c = shade(color, 0.9f)
-        tint.background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(Color.argb(0x8C, Color.red(c), Color.green(c), Color.blue(c)), 0x00000000))
     }
 
     private fun onTileFocused(t: Tile) {
@@ -439,29 +530,67 @@ class MainActivity : Activity() {
 
     // ---------- weather (Open-Meteo, no key) ----------
 
+    private fun httpGet(url: String): String {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 8000; c.readTimeout = 8000
+        c.setRequestProperty("User-Agent", "TVHome")
+        try { return c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
+    }
+
+    private fun kindFor(code: Int, day: Boolean): Int = when (code) {
+        0, 1 -> if (day) 0 else 1
+        in 51..67, in 80..82 -> 3
+        in 95..99 -> 4
+        else -> 2
+    }
+
     private fun fetchWeather() {
         Thread {
+            var temp = 0
+            var text = ""
+            var kind = 2
+            var ok = false
             try {
-                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
-                val c = url.openConnection() as HttpURLConnection
-                c.connectTimeout = 8000; c.readTimeout = 8000
-                val body = c.inputStream.bufferedReader().use { it.readText() }
-                c.disconnect()
+                val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
                 val cur = JSONObject(body).getJSONObject("current")
-                val temp = Math.round(cur.getDouble("temperature_2m")).toInt()
+                temp = Math.round(cur.getDouble("temperature_2m")).toInt()
                 val code = cur.getInt("weather_code")
-                val day = cur.optInt("is_day", 1) == 1
-                runOnUiThread {
-                    weatherText.text = "Riyadh   $temp°   ${describe(code)}"
-                    weatherIcon.kind = when (code) {
-                        0, 1 -> if (day) 0 else 1
-                        in 51..67, in 80..82 -> 3
-                        in 95..99 -> 4
-                        else -> 2
-                    }
+                text = describe(code)
+                kind = kindFor(code, cur.optInt("is_day", 1) == 1)
+                ok = true
+            } catch (e: Exception) { /* try the backup source */ }
+            if (!ok) {
+                for (base in listOf("https://wttr.in", "http://wttr.in")) {
+                    try {
+                        val parts = httpGet("$base/Riyadh?format=%t|%C").trim().split("|")
+                        val num = Regex("-?[0-9]+").find(parts[0])?.value?.toIntOrNull()
+                        if (num != null) {
+                            temp = num
+                            text = if (parts.size > 1) parts[1].trim() else ""
+                            val low = text.lowercase()
+                            val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                            val day = hr in 6..17
+                            kind = when {
+                                low.contains("thunder") -> 4
+                                low.contains("rain") || low.contains("drizzle") || low.contains("shower") -> 3
+                                low.contains("sun") || low.contains("clear") -> if (day) 0 else 1
+                                else -> 2
+                            }
+                            ok = true
+                            break
+                        }
+                    } catch (e: Exception) { /* next */ }
                 }
-            } catch (e: Exception) {
-                lastWeather = SystemClock.elapsedRealtime() - 14 * 60 * 1000L // retry in ~1 min
+            }
+            val t2 = "Riyadh   $temp°   $text"
+            runOnUiThread {
+                if (ok) {
+                    if (weatherText.text.toString() != t2) weatherText.text = t2
+                    weatherIcon.kind = kind
+                } else {
+                    lastWeather = SystemClock.elapsedRealtime() - 14 * 60 * 1000L // retry in ~1 min
+                    if (weatherText.text.toString().endsWith("…")) weatherText.text = "Riyadh   weather unavailable"
+                }
             }
         }.start()
     }
@@ -605,6 +734,7 @@ class MainActivity : Activity() {
 
     /** Finds the TV's real input id for physical HDMI port n (falls back to the MediaTek default id). */
     private fun inputIdFor(n: Int): String {
+        prefs.getString("map_$n", null)?.let { if (it.isNotBlank()) return it }
         try {
             val list = tim?.tvInputList.orEmpty()
                 .filter { it.type == TvInputInfo.TYPE_HDMI && it.isPassthroughInput && it.parentId == null }
@@ -625,10 +755,13 @@ class MainActivity : Activity() {
         for (n in 1..HDMI_COUNT) {
             val id = inputIdFor(n)
             inputsRow.addView(buildCard(
-                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK to switch, hold OK to rename",
+                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK to open, hold OK to rename",
                     0xFF2C3550.toInt(), null, id, "", n), true))
         }
-        inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), false))
+        inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
+        val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
+                  else "Press OK to download the latest version from GitHub"
+        inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), false))
         if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
     }
 
@@ -654,6 +787,124 @@ class MainActivity : Activity() {
             try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); return } catch (e: Exception) { }
         }
         Toast.makeText(this, "Couldn't open Settings on this TV.", Toast.LENGTH_LONG).show()
+    }
+
+    // ---------- in-app updater (GitHub releases) ----------
+
+    private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_LONG).show()
+
+    private fun currentBuild(): Int = try {
+        packageManager.getPackageInfo(packageName, 0).versionName?.substringAfterLast('.')?.toIntOrNull() ?: 0
+    } catch (e: Exception) { 0 }
+
+    private fun fetchLatest(): Boolean {
+        return try {
+            val c = URL("https://api.github.com/repos/$REPO/releases/latest").openConnection() as HttpURLConnection
+            c.connectTimeout = 10000; c.readTimeout = 10000
+            c.setRequestProperty("User-Agent", "TVHome")
+            c.setRequestProperty("Accept", "application/vnd.github+json")
+            val body = c.inputStream.bufferedReader().use { it.readText() }
+            c.disconnect()
+            val j = JSONObject(body)
+            val n = Regex("(\\d+)").find(j.getString("tag_name"))?.value?.toIntOrNull() ?: 0
+            val assets = j.getJSONArray("assets")
+            var url: String? = null
+            for (i in 0 until assets.length()) {
+                val a = assets.getJSONObject(i)
+                if (a.getString("name").endsWith(".apk")) { url = a.getString("browser_download_url"); break }
+            }
+            latestBuild = n
+            latestUrl = url
+            true
+        } catch (e: Exception) { false }
+    }
+
+    private fun showProgress(msg: String) {
+        val existing = progressTv
+        if (existing != null) { existing.text = msg; return }
+        val d = Dialog(this)
+        d.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val t = tv(msg, 20f, Color.WHITE, true).apply {
+            setPadding(u(36f), u(26f), u(36f), u(26f))
+            background = GradientDrawable().apply { cornerRadius = dp(24).toFloat(); setColor(0xF01C1C24.toInt()) }
+        }
+        d.setContentView(t)
+        d.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        d.show()
+        progressDlg = d
+        progressTv = t
+    }
+
+    private fun hideProgress() {
+        try { progressDlg?.dismiss() } catch (e: Exception) { }
+        progressDlg = null
+        progressTv = null
+    }
+
+    private fun checkAndUpdate() {
+        showProgress("Checking for updates…")
+        Thread {
+            val ok = fetchLatest()
+            val url = latestUrl
+            runOnUiThread {
+                if (!ok || url == null) {
+                    hideProgress(); toast("Couldn't reach GitHub. Check the internet and that the repo is public.")
+                } else if (latestBuild <= myBuild) {
+                    hideProgress(); toast("You're up to date (build $myBuild).")
+                } else {
+                    showProgress("Downloading build $latestBuild…  0%")
+                    downloadAndInstall(url)
+                }
+            }
+        }.start()
+    }
+
+    private fun downloadAndInstall(url: String) {
+        Thread {
+            var session: PackageInstaller.Session? = null
+            try {
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.instanceFollowRedirects = true
+                c.connectTimeout = 15000; c.readTimeout = 30000
+                c.setRequestProperty("User-Agent", "TVHome")
+                val total = c.contentLength
+                val installer = packageManager.packageInstaller
+                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+                val id = installer.createSession(params)
+                session = installer.openSession(id)
+                c.inputStream.use { input ->
+                    session.openWrite("tvhome.apk", 0, if (total > 0) total.toLong() else -1L).use { out ->
+                        val buf = ByteArray(64 * 1024)
+                        var done = 0L
+                        var lastPct = -1
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            done += n
+                            if (total > 0) {
+                                val pct = (done * 100 / total).toInt()
+                                if (pct != lastPct) {
+                                    lastPct = pct
+                                    runOnUiThread { showProgress("Downloading build $latestBuild…  $pct%") }
+                                }
+                            }
+                        }
+                        session.fsync(out)
+                    }
+                }
+                runOnUiThread { showProgress("Installing…") }
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                    (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                val pi = PendingIntent.getBroadcast(this, 0,
+                    Intent(ACTION_INSTALL).setPackage(packageName), flags)
+                session.commit(pi.intentSender)
+                session.close()
+            } catch (e: Exception) {
+                try { session?.abandon() } catch (e2: Exception) { }
+                runOnUiThread { hideProgress(); toast("Download failed. Check the internet and try again.") }
+            }
+        }.start()
     }
 
     // ---------- cards ----------
@@ -707,6 +958,25 @@ class MainActivity : Activity() {
                     leftMargin = u(9f); topMargin = u(9f)
                 })
             }
+            3 -> {
+                frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(0xFF2A6FDB.toInt(), 0xFF173B7A.toInt())).apply { cornerRadius = r }
+                val gs = (cardH * 0.40f).toInt()
+                frame.addView(UpdateView(this),
+                    FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                        topMargin = (cardH * 0.14f).toInt()
+                    })
+                frame.addView(tv("Update", 15f, Color.WHITE, true).apply { gravity = Gravity.CENTER },
+                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
+                if (latestBuild > myBuild) {
+                    frame.addView(tv("NEW", 10f, Color.WHITE, true).apply {
+                        setPadding(u(8f), u(3f), u(8f), u(3f))
+                        background = GradientDrawable().apply { cornerRadius = u(12f).toFloat(); setColor(0xFFFF3B30.toInt()) }
+                    }, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply {
+                        topMargin = u(9f); rightMargin = u(9f)
+                    })
+                }
+            }
             else -> {
                 frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
                     intArrayOf(0xFF4A4F5E.toInt(), 0xFF1E2230.toInt())).apply { cornerRadius = r }
@@ -739,7 +1009,7 @@ class MainActivity : Activity() {
             alpha = 0f; setPadding(0, u(12f), 0, 0)
         }
 
-        val box = LinearLayout(this)
+        val box = CardBox(this)
         box.orientation = LinearLayout.VERTICAL
         box.isFocusable = true
         box.isClickable = true
@@ -753,7 +1023,7 @@ class MainActivity : Activity() {
         box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
 
         box.setOnClickListener {
-            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); else -> openSettings() }
+            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); else -> openSettings() }
         }
         if (t.kind == 1) {
             box.isLongClickable = true
@@ -763,8 +1033,7 @@ class MainActivity : Activity() {
         box.setOnFocusChangeListener { v, f ->
             val s = if (f) 1.10f else 1f
             v.animate().scaleX(s).scaleY(s).alpha(if (f) 1f else 0.62f)
-                .setDuration(120).setInterpolator(DecelerateInterpolator()).start()
-            frame.animate().translationZ(if (f) u(20f).toFloat() else 0f).setDuration(120).start()
+                .setDuration(100).setInterpolator(DecelerateInterpolator()).start()
             border.alpha = if (f) 1f else 0.10f
             label.alpha = if (f && t.kind == 0) 1f else 0f
             if (f) onTileFocused(t)
