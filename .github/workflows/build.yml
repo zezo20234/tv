@@ -15,7 +15,8 @@ jobs:
         with:
           gradle-version: "8.7"
       - run: gradle assembleDebug --no-daemon
+      - run: cp app/build/outputs/apk/debug/app-debug.apk remover.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: TVHome-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: remover
+          path: remover.apk
