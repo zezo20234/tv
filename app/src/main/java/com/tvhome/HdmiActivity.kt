@@ -2,6 +2,7 @@ package com.tvhome
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -151,7 +152,9 @@ class HdmiActivity : Activity() {
             idx++
             tune()
         } else {
-            show("None of the inputs could be opened.\n\n" + diag())
+            Toast.makeText(this, "Couldn't open any input. Opening the Input Finder…", Toast.LENGTH_LONG).show()
+            startActivity(Intent(this, FinderActivity::class.java))
+            finish()
         }
     }
 

@@ -510,7 +510,7 @@ class MainActivity : Activity() {
         heroTitle.text = t.title
         heroSub.text = t.subtitle
         heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
-        heroPort.visibility = if (t.kind == 1) View.VISIBLE else View.INVISIBLE
+        heroPort.visibility = if (t.kind == 1 || t.kind == 4) View.VISIBLE else View.INVISIBLE
         heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
         heroUpdate.visibility = if (t.kind == 3) View.VISIBLE else View.INVISIBLE
         if (t.kind == 0) {
@@ -550,6 +550,7 @@ class MainActivity : Activity() {
             var text = ""
             var kind = 2
             var ok = false
+            var err = ""
             try {
                 val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
                 val cur = JSONObject(body).getJSONObject("current")
@@ -558,7 +559,7 @@ class MainActivity : Activity() {
                 text = describe(code)
                 kind = kindFor(code, cur.optInt("is_day", 1) == 1)
                 ok = true
-            } catch (e: Exception) { /* try the backup source */ }
+            } catch (e: Exception) { err = e.javaClass.simpleName }
             if (!ok) {
                 for (base in listOf("https://wttr.in", "http://wttr.in")) {
                     try {
@@ -579,7 +580,7 @@ class MainActivity : Activity() {
                             ok = true
                             break
                         }
-                    } catch (e: Exception) { /* next */ }
+                    } catch (e: Exception) { err = e.javaClass.simpleName }
                 }
             }
             val t2 = "Riyadh   $temp°   $text"
@@ -589,7 +590,14 @@ class MainActivity : Activity() {
                     weatherIcon.kind = kind
                 } else {
                     lastWeather = SystemClock.elapsedRealtime() - 14 * 60 * 1000L // retry in ~1 min
-                    if (weatherText.text.toString().endsWith("…")) weatherText.text = "Riyadh   weather unavailable"
+                    val why = when {
+                        err.contains("Security") -> "app has no internet permission"
+                        err.contains("UnknownHost") -> "no internet"
+                        err.contains("SSL") || err.contains("Cert") -> "check the TV date and time"
+                        else -> err
+                    }
+                    val cur = weatherText.text.toString()
+                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather unavailable ($why)"
                 }
             }
         }.start()
@@ -761,19 +769,36 @@ class MainActivity : Activity() {
         inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
         val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
                   else "Press OK to download the latest version from GitHub"
-        inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), false))
+        inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))
+        inputsRow.addView(buildCard(Tile(4, "Find inputs", "Find the app that switches your TV's HDMI inputs", 0xFF2F4A3C.toInt(), null), false))
         if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
     }
 
+    private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
+
     private fun openHdmi(t: Tile) {
-        try {
-            startActivity(Intent(this, HdmiActivity::class.java)
-                .putExtra("input_id", t.pkg)
-                .putExtra("name", t.title)
-                .putExtra("n", t.n))
-        } catch (e: Exception) {
-            Toast.makeText(this, "Couldn't open ${t.title}", Toast.LENGTH_SHORT).show()
+        // 1) an app the user picked in Input Finder
+        val saved = prefs.getString("input_app", null)
+        if (!saved.isNullOrBlank() && saved.contains("/")) {
+            try {
+                startActivity(Intent(Intent.ACTION_MAIN)
+                    .setClassName(saved.substringBefore('/'), saved.substringAfter('/'))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                return
+            } catch (e: Exception) { /* fall through */ }
         }
+        // 2) the TV shares its inputs with apps: use the built-in HDMI viewer
+        if (tifWorks()) {
+            try {
+                startActivity(Intent(this, HdmiActivity::class.java)
+                    .putExtra("input_id", t.pkg).putExtra("name", t.title).putExtra("n", t.n))
+                return
+            } catch (e: Exception) { /* fall through */ }
+        }
+        // 3) it doesn't: help find the TV's own input app
+        Toast.makeText(this, "This TV doesn't share its inputs with apps. Pick the app that switches inputs.",
+            Toast.LENGTH_LONG).show()
+        startActivity(Intent(this, FinderActivity::class.java))
     }
 
     private fun openSettings() {
@@ -958,6 +983,17 @@ class MainActivity : Activity() {
                     leftMargin = u(9f); topMargin = u(9f)
                 })
             }
+            4 -> {
+                frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(0xFF3A4D43.toInt(), 0xFF1B2A24.toInt())).apply { cornerRadius = r }
+                val pw = (cardW * 0.40f).toInt()
+                frame.addView(HdmiPortView(this),
+                    FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                        topMargin = (cardH * 0.26f).toInt()
+                    })
+                frame.addView(tv("Find inputs", 15f, Color.WHITE, true).apply { gravity = Gravity.CENTER },
+                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
+            }
             3 -> {
                 frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
                     intArrayOf(0xFF2A6FDB.toInt(), 0xFF173B7A.toInt())).apply { cornerRadius = r }
@@ -1023,7 +1059,7 @@ class MainActivity : Activity() {
         box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
 
         box.setOnClickListener {
-            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); else -> openSettings() }
+            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); 4 -> startActivity(Intent(this, FinderActivity::class.java)); else -> openSettings() }
         }
         if (t.kind == 1) {
             box.isLongClickable = true
