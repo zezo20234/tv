@@ -9,8 +9,8 @@ android {
         applicationId = "com.tvhome.app"
         minSdk = 21
         targetSdk = 34
-        versionCode = 17
-        versionName = "10.7"
+        versionCode = 20
+        versionName = "10.10"
     }
     signingConfigs {
         getByName("debug") {

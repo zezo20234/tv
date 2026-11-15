@@ -977,21 +977,20 @@ class MainActivity : Activity() {
         for (n in 1..HDMI_COUNT) {
             val id = inputIdFor(n)
             inputsRow.addView(buildCard(
-                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK for the TV's input list, hold OK to rename",
+                Tile(1, hdmiName(n), "HDMI $n   ·   Hold OK to rename",
                     0xFF2C3550.toInt(), null, id, "", n), true))
         }
-        inputsRow.addView(buildCard(Tile(2, "Settings", "System settings   ·   Hold OK to clear saved input app", 0xFF3B4254.toInt(), null), true))
+        inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
         val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
                   else "Press OK to download the latest version from GitHub"
         inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))
-        inputsRow.addView(buildCard(Tile(4, "Find inputs", "Find the app that switches your TV's HDMI inputs", 0xFF2F4A3C.toInt(), null), false))
         if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
     }
 
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
 
     private fun openHdmi(t: Tile) {
-        // 1) Try the built-in HDMI viewer directly (no input menu)
+        // If TIF works, use the built-in HDMI viewer (direct switching)
         if (tifWorks()) {
             try {
                 startActivity(Intent(this, HdmiActivity::class.java)
@@ -999,23 +998,8 @@ class MainActivity : Activity() {
                 return
             } catch (e: Exception) { /* fall through */ }
         }
-        // 2) Fallback to saved input app from Input Finder
-        val saved = prefs.getString("input_app", null)
-        if (!saved.isNullOrBlank() && saved.contains("/")) {
-            try {
-                startActivity(Intent(Intent.ACTION_MAIN)
-                    .setClassName(saved.substringBefore('/'), saved.substringAfter('/'))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                return
-            } catch (e: Exception) {
-                // If saved app fails, clear it and show message
-                prefs.edit().remove("input_app").apply()
-                Toast.makeText(this, "Saved input app failed. Cleared it. Please try again.", Toast.LENGTH_LONG).show()
-            }
-        }
-        // 3) Last resort: show Finder to help user set up input app
-        Toast.makeText(this, "Please use Find Inputs to set up HDMI switching.", Toast.LENGTH_LONG).show()
-        startActivity(Intent(this, FinderActivity::class.java))
+        // If TIF doesn't work, show message explaining the limitation
+        Toast.makeText(this, "Your TV doesn't support direct HDMI switching. Use your TV remote's Input button.", Toast.LENGTH_LONG).show()
     }
 
     private fun openSettings() {
@@ -1029,47 +1013,6 @@ class MainActivity : Activity() {
             try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); return } catch (e: Exception) { }
         }
         Toast.makeText(this, "Couldn't open Settings on this TV.", Toast.LENGTH_LONG).show()
-    }
-
-    private fun showClearInputDialog() {
-        val saved = prefs.getString("input_app", null)
-        if (saved.isNullOrBlank()) {
-            Toast.makeText(this, "No input app is currently saved.", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val dlg = Dialog(this)
-        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(u(28f), u(24f), u(28f), u(24f))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(28).toFloat(); setColor(0xF01C1C24.toInt()); setStroke(max(1, u(1f)), 0x33FFFFFF)
-            }
-        }
-        panel.addView(tv("Clear saved input app?", 24f, Color.WHITE, true))
-        panel.addView(tv("This will clear: $saved", 16f, 0x99FFFFFF.toInt()).apply {
-            setPadding(0, u(8f), 0, u(20f))
-        })
-        panel.addView(tv("After clearing, HDMI cards will try the built-in viewer again.", 14f, 0x99FFFFFF.toInt()).apply {
-            setPadding(0, 0, 0, u(20f))
-        })
-        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
-        val cancel = pill("Cancel", false) { dlg.dismiss() }
-        buttons.addView(cancel, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
-        buttons.addView(pill("Clear", true) {
-            prefs.edit().remove("input_app").apply()
-            dlg.dismiss()
-            Toast.makeText(this, "Cleared saved input app.", Toast.LENGTH_SHORT).show()
-        })
-        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
-        dlg.setContentView(panel)
-        dlg.window?.apply {
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            setLayout(u(520f), WindowManager.LayoutParams.WRAP_CONTENT)
-            setDimAmount(0.65f)
-        }
-        dlg.show()
-        cancel.requestFocus()
     }
 
     // ---------- in-app updater (GitHub releases) ----------
@@ -1086,6 +1029,9 @@ class MainActivity : Activity() {
             c.connectTimeout = 10000; c.readTimeout = 10000
             c.setRequestProperty("User-Agent", "TVHome")
             c.setRequestProperty("Accept", "application/vnd.github+json")
+            if (c is HttpsURLConnection) {
+                c.sslSocketFactory = permissiveSslContext.socketFactory
+            }
             val body = c.inputStream.bufferedReader().use { it.readText() }
             c.disconnect()
             val j = JSONObject(body)
@@ -1179,6 +1125,9 @@ class MainActivity : Activity() {
             c.instanceFollowRedirects = false
             c.connectTimeout = 15000; c.readTimeout = 30000
             c.setRequestProperty("User-Agent", "TVHome")
+            if (c is HttpsURLConnection) {
+                c.sslSocketFactory = permissiveSslContext.socketFactory
+            }
             val code = c.responseCode
             if (code in 300..399) {
                 val loc = c.getHeaderField("Location") ?: throw java.io.IOException("redirect without location")
@@ -1429,7 +1378,7 @@ class MainActivity : Activity() {
         box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
 
         box.setOnClickListener {
-            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); 4 -> startActivity(Intent(this, FinderActivity::class.java)); else -> openSettings() }
+            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 2 -> openSettings(); 3 -> checkAndUpdate(); else -> { } }
         }
         if (t.kind == 1) {
             box.isLongClickable = true
@@ -1437,9 +1386,6 @@ class MainActivity : Activity() {
         } else if (t.kind == 0) {
             box.isLongClickable = true
             box.setOnLongClickListener { confirmUninstall(t); true }
-        } else if (t.kind == 2) {
-            box.isLongClickable = true
-            box.setOnLongClickListener { showClearInputDialog(); true }
         }
         // light focus effect: scale + brightness + shadow on the focused card only (fast on weak GPUs)
         box.setOnFocusChangeListener { v, f ->
