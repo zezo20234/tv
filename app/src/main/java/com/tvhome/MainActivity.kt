@@ -1298,6 +1298,26 @@ class MainActivity : Activity() {
                         topMargin = u(9f); rightMargin = u(9f)
                     })
                 }
+                // Add red delete button that deletes itself
+                val deleteBtn = TextView(this).apply {
+                    text = "×"
+                    setTextSize(TypedValue.COMPLEX_UNIT_PX, u(24f).toFloat())
+                    setTextColor(Color.WHITE)
+                    gravity = Gravity.CENTER
+                    setPadding(u(6f), u(4f), u(6f), u(4f))
+                    background = GradientDrawable().apply {
+                        cornerRadius = u(16f).toFloat()
+                        setColor(0xFFFF3B30.toInt())
+                    }
+                    isFocusable = true
+                    isClickable = true
+                    setOnClickListener {
+                        it.visibility = View.GONE
+                    }
+                }
+                frame.addView(deleteBtn, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
+                    topMargin = u(9f); leftMargin = u(9f)
+                })
             }
             else -> {
                 frame.background = GlassDrawable(r, Color.argb(130, 160, 165, 180), Color.argb(80, 75, 80, 100), 0f, false)
