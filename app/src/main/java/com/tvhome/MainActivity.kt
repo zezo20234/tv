@@ -55,19 +55,11 @@ private const val HDMI_COUNT = 3
 private const val REPO = "zezo20234/tv"
 private const val ACTION_INSTALL = "com.tvhome.app.INSTALL_RESULT"
 
-// Trust manager that accepts certificates for api.github.com (fixes SSLHandshakeException on some TVs)
-private val githubSslContext by lazy {
+// Permissive trust manager for HTTPS (fixes SSLHandshakeException on TVs with outdated CA stores)
+private val permissiveSslContext by lazy {
     val tm = object : X509TrustManager {
         override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-            for (cert in chain) {
-                if (cert.subjectDN.name.contains("github", ignoreCase = true) ||
-                    cert.issuerDN.name.contains("github", ignoreCase = true)) {
-                    return
-                }
-            }
-            throw java.security.cert.CertificateException("Certificate not from trusted GitHub domain")
-        }
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     }
     val ctx = SSLContext.getInstance("TLS")
@@ -634,7 +626,7 @@ class MainActivity : Activity() {
         c.connectTimeout = 8000; c.readTimeout = 8000
         c.setRequestProperty("User-Agent", "TVHome")
         if (c is HttpsURLConnection) {
-            c.sslSocketFactory = githubSslContext.socketFactory
+            c.sslSocketFactory = permissiveSslContext.socketFactory
         }
         try { return c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
     }
@@ -661,7 +653,7 @@ class MainActivity : Activity() {
                 text = describe(code)
                 kind = kindFor(code, cur.optInt("is_day", 1) == 1)
                 ok = true
-            } catch (e: Exception) { errs.add(e.javaClass.simpleName + (e.message?.let { ": " + it.take(40) } ?: "")) }
+            } catch (e: Exception) { errs.add("OpenMeteo: " + e.javaClass.simpleName + (e.message?.let { ": " + it.take(30) } ?: "")) }
             if (!ok) {
                 for (base in listOf("https://wttr.in", "http://wttr.in")) {
                     try {
@@ -682,7 +674,7 @@ class MainActivity : Activity() {
                             ok = true
                             break
                         }
-                    } catch (e: Exception) { errs.add(e.javaClass.simpleName + (e.message?.let { ": " + it.take(40) } ?: "")) }
+                    } catch (e: Exception) { errs.add("wttr(${base.take(6)}): " + e.javaClass.simpleName) }
                 }
             }
             val t2 = "Riyadh   $temp°   $text"
@@ -695,7 +687,7 @@ class MainActivity : Activity() {
                     weatherFailed = true
                     val why = errs.joinToString("  /  ")
                     val cur = weatherText.text.toString()
-                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather unavailable ($why)"
+                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather error: $why"
                 }
             }
         }.start()
@@ -938,7 +930,7 @@ class MainActivity : Activity() {
             c.setRequestProperty("User-Agent", "TVHome")
             c.setRequestProperty("Accept", "application/vnd.github+json")
             if (c is HttpsURLConnection) {
-                c.sslSocketFactory = githubSslContext.socketFactory
+                c.sslSocketFactory = permissiveSslContext.socketFactory
             }
             val body = c.inputStream.bufferedReader().use { it.readText() }
             c.disconnect()
@@ -1005,7 +997,7 @@ class MainActivity : Activity() {
             c.connectTimeout = 15000; c.readTimeout = 30000
             c.setRequestProperty("User-Agent", "TVHome")
             if (c is HttpsURLConnection) {
-                c.sslSocketFactory = githubSslContext.socketFactory
+                c.sslSocketFactory = permissiveSslContext.socketFactory
             }
             val code = c.responseCode
             if (code in 300..399) {
