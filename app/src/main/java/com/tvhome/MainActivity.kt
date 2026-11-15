@@ -67,6 +67,9 @@ private val permissiveSslContext by lazy {
     ctx
 }
 
+// Permissive hostname verifier (fixes SSL hostname validation issues)
+private val permissiveHostnameVerifier = javax.net.ssl.HostnameVerifier { hostname: String, session: javax.net.ssl.SSLSession -> true }
+
 // ======================= Custom views (all cheap to draw) =======================
 
 /** Dark cinematic mesh gradient, pre-rendered once into a small bitmap (one cheap blit per frame). */
@@ -1004,7 +1007,7 @@ class MainActivity : Activity() {
             c.setRequestProperty("Accept", "application/vnd.github+json")
             if (c is HttpsURLConnection) {
                 c.sslSocketFactory = permissiveSslContext.socketFactory
-                c.hostnameVerifier = { _, _ -> true }
+                c.hostnameVerifier = permissiveHostnameVerifier
             }
             val body = c.inputStream.bufferedReader().use { it.readText() }
             c.disconnect()
@@ -1101,7 +1104,7 @@ class MainActivity : Activity() {
             c.setRequestProperty("User-Agent", "TVHome")
             if (c is HttpsURLConnection) {
                 c.sslSocketFactory = permissiveSslContext.socketFactory
-                c.hostnameVerifier = { _, _ -> true }
+                c.hostnameVerifier = permissiveHostnameVerifier
             }
             val code = c.responseCode
             if (code in 300..399) {
