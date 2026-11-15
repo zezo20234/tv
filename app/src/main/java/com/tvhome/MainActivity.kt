@@ -364,7 +364,9 @@ class MainActivity : Activity() {
     private lateinit var weatherText: TextView
     private lateinit var greeting: TextView
     private lateinit var clockText: TextView
-    private val clockFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US)
+    private val clockFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
+    }
     private lateinit var weatherIcon: WeatherView
     private lateinit var wifi: WifiView
     private lateinit var prefs: SharedPreferences
