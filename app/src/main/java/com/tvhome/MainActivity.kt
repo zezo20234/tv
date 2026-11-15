@@ -72,11 +72,29 @@ private val permissiveHostnameVerifier = javax.net.ssl.HostnameVerifier { hostna
 
 // ======================= Custom views (all cheap to draw) =======================
 
+enum class ColorMode(val name: String, val colors: List<Int>) {
+    BLUE("Blue Gradient", listOf(0xFF2F5BFF, 0xFF8B3DFF, 0xFF12B5C8, 0xFFFF5E9C)),
+    PURPLE("Purple Haze", listOf(0xFF8B3DFF, 0xFFE056FD, 0xFFBE2EDD, 0xFF7B1FA2)),
+    GREEN("Forest Night", listOf(0xFF2E7D32, 0xFF4CAF50, 0xFF81C784, 0xFF1B5E20)),
+    RED("Sunset Red", listOf(0xFFE53935, 0xFFFF5252, 0xFFFF8A80, 0xFFB71C1C)),
+    ORANGE("Copper", listOf(0xFFE65100, 0xFFFF9800, 0xFFFFB74D, 0xFFBF360C)),
+    CYAN("Ocean Cyan", listOf(0xFF00838F, 0xFF00BCD4, 0xFF4DD0E1, 0xFF006064))
+}
+
 /** Dark cinematic mesh gradient, pre-rendered once into a small bitmap (one cheap blit per frame). */
 class StaticBackground(ctx: Context) : View(ctx) {
     private var bmp: Bitmap? = null
     private val dst = Rect()
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private var colorMode: ColorMode = ColorMode.BLUE
+
+    fun setColorMode(mode: ColorMode) {
+        if (colorMode != mode) {
+            colorMode = mode
+            bmp = null
+            requestLayout()
+        }
+    }
 
     private fun blob(c: Canvas, cx: Float, cy: Float, r: Float, color: Int, alpha: Int) {
         val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -94,10 +112,11 @@ class StaticBackground(ctx: Context) : View(ctx) {
         val c = Canvas(b)
         c.drawColor(0xFF05070D.toInt())
         val m = max(bw, bh).toFloat()
-        blob(c, bw * 0.10f, bh * 0.05f, m * 0.75f, 0xFF2F5BFF.toInt(), 170)
-        blob(c, bw * 0.90f, bh * 0.25f, m * 0.60f, 0xFF8B3DFF.toInt(), 130)
-        blob(c, bw * 0.55f, bh * 1.05f, m * 0.70f, 0xFF12B5C8.toInt(), 105)
-        blob(c, bw * 0.98f, bh * 0.95f, m * 0.45f, 0xFFFF5E9C.toInt(), 70)
+        val colors = colorMode.colors
+        blob(c, bw * 0.10f, bh * 0.05f, m * 0.75f, colors[0], 170)
+        blob(c, bw * 0.90f, bh * 0.25f, m * 0.60f, colors[1], 130)
+        blob(c, bw * 0.55f, bh * 1.05f, m * 0.70f, colors[2], 105)
+        blob(c, bw * 0.98f, bh * 0.95f, m * 0.45f, colors[3], 70)
         bmp = b
     }
 
@@ -333,6 +352,79 @@ class UpdateView(ctx: Context) : View(ctx) {
     }
 }
 
+/** PS5 Logo: stylized PlayStation shape with Sony blue color */
+class Ps5LogoView(ctx: Context) : View(ctx) {
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(200, 0, 48, 135)
+        style = Paint.Style.FILL
+    }
+    private val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val cx = w / 2f
+        val cy = h / 2f
+        val scale = min(w, h) * 0.38f
+
+        outline.strokeWidth = scale * 0.12f
+
+        // P shape - simplified PlayStation logo
+        c.save()
+        c.translate(cx, cy)
+        c.scale(scale / 100f, scale / 100f)
+
+        // Vertical bar of P
+        c.drawRoundRect(-30f, -50f, -10f, 50f, 8f, 8f, fill)
+        c.drawRoundRect(-30f, -50f, -10f, 50f, 8f, 8f, outline)
+
+        // Top curve of P
+        c.drawRoundRect(-10f, -50f, 40f, -10f, 8f, 8f, fill)
+        c.drawRoundRect(-10f, -50f, 40f, -10f, 8f, 8f, outline)
+
+        // Middle curve of P
+        c.drawRoundRect(-10f, -15f, 30f, 15f, 8f, 8f, fill)
+        c.drawRoundRect(-10f, -15f, 30f, 15f, 8f, 8f, outline)
+
+        // S shape below
+        val sPath = Path()
+        sPath.moveTo(-25f, 30f)
+        sPath.quadTo(-45f, 30f, -45f, 45f)
+        sPath.quadTo(-45f, 60f, -20f, 60f)
+        sPath.quadTo(10f, 60f, 10f, 75f)
+        sPath.quadTo(10f, 90f, -15f, 90f)
+        c.drawPath(sPath, fill)
+        c.drawPath(sPath, outline)
+
+        c.restore()
+    }
+}
+
+/** Options/Settings button icon */
+class OptionsView(ctx: Context) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = 0xFFE6E9F0.toInt()
+        strokeCap = Paint.Cap.ROUND
+    }
+    override fun onDraw(canvas: Canvas) {
+        val cx = width / 2f
+        val cy = height / 2f
+        val r = min(width, height) / 2f
+
+        // Three horizontal lines (hamburger menu style)
+        p.strokeWidth = r * 0.20f
+        canvas.drawLine(cx - r * 0.5f, cy - r * 0.25f, cx + r * 0.5f, cy - r * 0.25f, p)
+        canvas.drawLine(cx - r * 0.5f, cy, cx + r * 0.5f, cy, p)
+        canvas.drawLine(cx - r * 0.5f, cy + r * 0.25f, cx + r * 0.5f, cy + r * 0.25f, p)
+    }
+}
+
 // ======================= Activity =======================
 
 class MainActivity : Activity() {
@@ -391,6 +483,9 @@ class MainActivity : Activity() {
     private var progressDlg: Dialog? = null
     private var progressTv: TextView? = null
     private val myBuild: Int by lazy { currentBuild() }
+    private lateinit var staticBg: StaticBackground
+    private var currentColorMode: ColorMode = ColorMode.BLUE
+    private lateinit var optionsBtn: FrameLayout
 
     private val installReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -456,13 +551,19 @@ class MainActivity : Activity() {
         prefs = getSharedPreferences("tvhome", MODE_PRIVATE)
         tim = getSystemService(Context.TV_INPUT_SERVICE) as? TvInputManager
 
+        // Load saved color mode
+        val savedMode = prefs.getString("color_mode", null)
+        currentColorMode = ColorMode.values().find { it.name == savedMode } ?: ColorMode.BLUE
+
         gap = u(16f)
         padH = u(46f)
         cardW = (W * 0.19f).toInt()
         cardH = cardW * 9 / 16
 
         val root = FrameLayout(this)
-        root.addView(StaticBackground(this), MATCH, MATCH)
+        staticBg = StaticBackground(this)
+        staticBg.setColorMode(currentColorMode)
+        root.addView(staticBg, MATCH, MATCH)
 
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(buildTopBar(), LinearLayout.LayoutParams(MATCH, WRAP))
@@ -565,7 +666,19 @@ class MainActivity : Activity() {
         timeCol.addView(clockText)
         timeCol.addView(dateText)
         right.addView(timeCol)
-        bar.addView(right, LinearLayout.LayoutParams(WRAP, WRAP))
+        bar.addView(right, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
+
+        // Options button
+        optionsBtn = FrameLayout(this).apply {
+            background = GlassDrawable(u(34f).toFloat(), Color.argb(70, 255, 255, 255), Color.argb(32, 255, 255, 255), 0.9f, true)
+            setPadding(u(16f), u(12f), u(16f), u(12f))
+            isFocusable = true
+            isClickable = true
+            addView(OptionsView(this@MainActivity), FrameLayout.LayoutParams(u(32f), u(32f), Gravity.CENTER))
+            setOnClickListener { showColorModeDialog() }
+        }
+        bar.addView(optionsBtn, LinearLayout.LayoutParams(WRAP, WRAP))
+
         updateGreeting()
         updateClock()
         return bar
@@ -913,7 +1026,11 @@ class MainActivity : Activity() {
     // ---------- HDMI ----------
 
     private fun hdmiName(n: Int): String =
-        prefs.getString("name_$n", null)?.takeIf { it.isNotBlank() } ?: "HDMI $n"
+        prefs.getString("name_$n", null)?.takeIf { it.isNotBlank() } ?: when (n) {
+            2 -> "PLAYSTATION 5 🎮"
+            3 -> "TV BOX 📺"
+            else -> "HDMI $n"
+        }
 
     private fun hwNumber(id: String): Int =
         Regex("HW(\\d+)$").find(id)?.groupValues?.get(1)?.toIntOrNull() ?: Int.MAX_VALUE
@@ -940,9 +1057,15 @@ class MainActivity : Activity() {
         inputsRow.removeAllViews()
         for (n in 1..HDMI_COUNT) {
             val id = inputIdFor(n)
+            val name = hdmiName(n)
+            val color = when (n) {
+                2 -> Color.argb(130, 0, 48, 135) // Sony blue for PS5
+                3 -> Color.argb(130, 26, 26, 26) // Dark for TV BOX
+                else -> 0xFF2C3550.toInt()
+            }
             inputsRow.addView(buildCard(
-                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK for the TV's input list, hold OK to rename",
-                    0xFF2C3550.toInt(), null, id, "", n), true))
+                Tile(1, name, "HDMI $n   ·   Press OK for the TV's input list, hold OK to rename",
+                    color, null, id, "", n), true))
         }
         inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
         val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
@@ -1247,16 +1370,34 @@ class MainActivity : Activity() {
                 frame.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
             }
             1 -> {
-                // Use PlayStation blue color if name contains PLAYSTATION
                 val isPs5 = t.title.contains("PLAYSTATION", ignoreCase = true)
-                val bgColor = if (isPs5) Color.argb(130, 0, 48, 135) else Color.argb(130, 150, 165, 215)
-                val bgEnd = if (isPs5) Color.argb(80, 0, 20, 80) else Color.argb(80, 70, 85, 135)
+                val isTvBox = t.title.contains("TV BOX", ignoreCase = true)
+                val bgColor = when {
+                    isPs5 -> Color.argb(130, 0, 48, 135)
+                    isTvBox -> Color.argb(130, 26, 26, 26)
+                    else -> Color.argb(130, 150, 165, 215)
+                }
+                val bgEnd = when {
+                    isPs5 -> Color.argb(80, 0, 20, 80)
+                    isTvBox -> Color.argb(80, 10, 10, 10)
+                    else -> Color.argb(80, 70, 85, 135)
+                }
                 frame.background = GlassDrawable(r, bgColor, bgEnd, 0f, false)
                 val pw = (cardW * 0.40f).toInt()
-                frame.addView(HdmiPortView(this),
-                    FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-                        topMargin = (cardH * 0.26f).toInt()
-                    })
+
+                // Show PS5 logo for PS5, HDMI port for others
+                if (isPs5) {
+                    frame.addView(Ps5LogoView(this),
+                        FrameLayout.LayoutParams((cardH * 0.45f).toInt(), (cardH * 0.45f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                            topMargin = (cardH * 0.20f).toInt()
+                        })
+                } else {
+                    frame.addView(HdmiPortView(this),
+                        FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                            topMargin = (cardH * 0.26f).toInt()
+                        })
+                }
+
                 frame.addView(tv(t.title, 15f, Color.WHITE, true).apply {
                     maxLines = 1; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.CENTER
                 }, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply {
@@ -1275,8 +1416,11 @@ class MainActivity : Activity() {
                         setColor(if (live) 0xFF34C759.toInt() else 0xFF6B7280.toInt())
                     }
                 }, LinearLayout.LayoutParams(u(7f), u(7f)).apply { rightMargin = u(6f) })
-                // Show PS5 emoji instead of PORT for PlayStation preset
-                val badgeText = if (isPs5) "PS5" else "PORT ${t.n}"
+                val badgeText = when {
+                    isPs5 -> "PS5"
+                    isTvBox -> "TV"
+                    else -> "PORT ${t.n}"
+                }
                 badge.addView(tv(badgeText, 10f, 0xCCFFFFFF.toInt(), true))
                 frame.addView(badge, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
                     leftMargin = u(9f); topMargin = u(9f)
@@ -1309,7 +1453,7 @@ class MainActivity : Activity() {
                         topMargin = u(9f); rightMargin = u(9f)
                     })
                 }
-                // Add red delete button that deletes itself
+                // Add red delete button that uninstalls the app itself
                 val deleteBtn = TextView(this).apply {
                     text = "×"
                     setTextSize(TypedValue.COMPLEX_UNIT_PX, u(24f).toFloat())
@@ -1323,7 +1467,17 @@ class MainActivity : Activity() {
                     isFocusable = true
                     isClickable = true
                     setOnClickListener {
-                        it.visibility = View.GONE
+                        // Uninstall this app
+                        val uri = Uri.parse("package:$packageName")
+                        val attempts = listOf(Intent(Intent.ACTION_UNINSTALL_PACKAGE, uri), Intent(Intent.ACTION_DELETE, uri))
+                        for (i in attempts) {
+                            try {
+                                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                startActivity(i)
+                                return@setOnClickListener
+                            } catch (e: Exception) { }
+                        }
+                        Toast.makeText(this@MainActivity, "Couldn't open uninstall screen", Toast.LENGTH_SHORT).show()
                     }
                 }
                 frame.addView(deleteBtn, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
@@ -1438,6 +1592,69 @@ class MainActivity : Activity() {
     }
 
     // ---------- rename dialog with presets ----------
+
+    private fun showColorModeDialog() {
+        val dlg = Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(u(28f), u(24f), u(28f), u(24f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat(); setColor(0xF01C1C24.toInt()); setStroke(max(1, u(1f)), 0x33FFFFFF)
+            }
+        }
+        panel.addView(tv("Color Theme", 24f, Color.WHITE, true))
+        panel.addView(tv("Choose your preferred color mode", 14f, 0x99FFFFFF.toInt()).apply {
+            setPadding(0, u(6f), 0, u(20f))
+        })
+
+        val modeRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, u(16f))
+        }
+        val modeButtons = ArrayList<TextView>()
+        for (mode in ColorMode.values()) {
+            val btn = TextView(this).apply {
+                text = mode.name
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, u(13f).toFloat())
+                setTextColor(Color.WHITE)
+                setPadding(u(14f), u(10f), u(14f), u(10f))
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    cornerRadius = u(14f).toFloat()
+                    setColor(mode.colors[0])
+                }
+                isFocusable = true
+                isClickable = true
+            }
+            btn.setOnClickListener {
+                modeButtons.forEach { it.alpha = 0.5f }
+                btn.alpha = 1f
+                currentColorMode = mode
+                staticBg.setColorMode(mode)
+                prefs.edit().putString("color_mode", mode.name).apply()
+            }
+            if (mode == currentColorMode) btn.alpha = 1f else btn.alpha = 0.5f
+            modeButtons.add(btn)
+            modeRow.addView(btn, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = u(8f) })
+        }
+        panel.addView(modeRow)
+
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(0, u(18f), 0, 0)
+        }
+        buttons.addView(pill("Close", false) { dlg.dismiss() })
+        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
+        dlg.setContentView(panel)
+        dlg.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(u(600f), WindowManager.LayoutParams.WRAP_CONTENT)
+            setDimAmount(0.65f)
+        }
+        dlg.show()
+        modeButtons.find { it.text == currentColorMode.name }?.requestFocus()
+    }
 
     private fun showRenameDialog(n: Int) {
         val dlg = Dialog(this)

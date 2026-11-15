@@ -9,8 +9,8 @@ android {
         applicationId = "com.tvhome.app"
         minSdk = 21
         targetSdk = 34
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 10) + 10
-        versionName = "10.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 20) + 20
+        versionName = "20.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
     }
     signingConfigs {
         getByName("debug") {
