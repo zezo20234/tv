@@ -424,6 +424,12 @@ class MainActivity : Activity() {
     private var progressTv: TextView? = null
     private val myBuild: Int by lazy { currentBuild() }
 
+    // Reset latestBuild on app start to force re-fetch after update
+    init {
+        latestBuild = 0
+        latestUrl = null
+    }
+
     private val installReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -1)) {
@@ -564,6 +570,22 @@ class MainActivity : Activity() {
             refreshApps(false)
             refreshInputs(0)
             handler.post(ticker)
+            // Re-check for updates on resume to detect if we just updated
+            Thread {
+                try {
+                    if (fetchLatest() && latestBuild > myBuild) {
+                        runOnUiThread {
+                            try {
+                                showUpdateDialog()
+                            } catch (e: Exception) {
+                                // Ignore dialog errors
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    // Ignore update check errors
+                }
+            }.start()
         } catch (e: Exception) {
             // Don't crash on resume errors
         }
@@ -684,7 +706,7 @@ class MainActivity : Activity() {
         try {
             heroTitle.text = t.title
             heroSub.text = t.subtitle
-            heroBtn.text = when (t.kind) { 0 -> "Open"; 1 -> "Choose input"; 2 -> "Settings"; 3 -> "Update"; else -> "Find inputs" }
+            heroBtn.text = when (t.kind) { 0 -> "Open"; 1 -> "Open input menu"; 2 -> "Settings"; 3 -> "Update"; 4 -> "Delete"; else -> "Find inputs" }
             heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
             heroPort.visibility = if (t.kind == 1 || t.kind == 4) View.VISIBLE else View.INVISIBLE
             heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
@@ -1043,6 +1065,7 @@ class MainActivity : Activity() {
             val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
                       else "Press OK to download the latest version from GitHub"
             inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))
+            inputsRow.addView(buildCard(Tile(4, "Delete App", "Uninstall TV Home", 0xFFFF3B30.toInt(), null), true))
             try {
                 if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
             } catch (e: Exception) {
@@ -1056,16 +1079,20 @@ class MainActivity : Activity() {
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
 
     private fun openHdmi(t: Tile) {
-        // If TIF works, use the built-in HDMI viewer (direct switching)
-        if (tifWorks()) {
-            try {
-                startActivity(Intent(this, HdmiActivity::class.java)
-                    .putExtra("input_id", t.pkg).putExtra("name", t.title).putExtra("n", t.n))
-                return
-            } catch (e: Exception) { /* fall through */ }
+        // Open the system input menu
+        val attempts = ArrayList<Intent>()
+        attempts.add(Intent("android.tv.action.TV_INPUT_SETUP"))
+        attempts.add(Intent("android.settings.INPUT_METHOD_SETTINGS"))
+        for (pkg in listOf("com.android.tv.settings", "com.android.settings", "com.mediatek.tvsettings")) {
+            val intent = Intent().setClassName(pkg, "$pkg.inputs.InputSettingsActivity")
+            attempts.add(intent)
+            val intent2 = Intent().setClassName(pkg, "$pkg.MainSettings")
+            attempts.add(intent2)
         }
-        // If TIF doesn't work, show message explaining the limitation
-        Toast.makeText(this, "Your TV doesn't support direct HDMI switching. Use your TV remote's Input button.", Toast.LENGTH_LONG).show()
+        for (i in attempts) {
+            try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); return } catch (e: Exception) { }
+        }
+        Toast.makeText(this, "Use your TV remote's Input button to switch HDMI.", Toast.LENGTH_LONG).show()
     }
 
     private fun openSettings() {
@@ -1397,6 +1424,39 @@ class MainActivity : Activity() {
                     })
                 }
             }
+            4 -> {
+                frame.background = GlassDrawable(r, Color.argb(215, 255, 59, 48), Color.argb(185, 200, 30, 30), 0f, false)
+                val gs = (cardH * 0.40f).toInt()
+                // Draw a trash icon using a custom view
+                val trashView = object : View(this) {
+                    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        style = Paint.Style.STROKE
+                        color = Color.WHITE
+                        strokeCap = Paint.Cap.ROUND
+                    }
+                    override fun onDraw(canvas: Canvas) {
+                        val w = width.toFloat()
+                        val h = height.toFloat()
+                        val sw = h * 0.08f
+                        p.strokeWidth = sw
+                        // Lid
+                        canvas.drawLine(w * 0.30f, h * 0.35f, w * 0.70f, h * 0.35f, p)
+                        canvas.drawLine(w * 0.25f, h * 0.30f, w * 0.75f, h * 0.30f, p)
+                        // Handle
+                        canvas.drawLine(w * 0.45f, h * 0.25f, w * 0.55f, h * 0.25f, p)
+                        // Body
+                        canvas.drawLine(w * 0.30f, h * 0.35f, w * 0.30f, h * 0.80f, p)
+                        canvas.drawLine(w * 0.70f, h * 0.35f, w * 0.70f, h * 0.80f, p)
+                        canvas.drawLine(w * 0.30f, h * 0.80f, w * 0.70f, h * 0.80f, p)
+                    }
+                }
+                frame.addView(trashView,
+                    FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                        topMargin = (cardH * 0.14f).toInt()
+                    })
+                frame.addView(tv("Delete", 15f, Color.WHITE, true).apply { gravity = Gravity.CENTER },
+                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
+            }
             else -> {
                 frame.background = GlassDrawable(r, Color.argb(130, 160, 165, 180), Color.argb(80, 75, 80, 100), 0f, false)
                 val gs = (cardH * 0.42f).toInt()
@@ -1436,7 +1496,7 @@ class MainActivity : Activity() {
 
         box.setOnClickListener {
             try {
-                when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 2 -> openSettings(); 3 -> checkAndUpdate(); else -> { } }
+                when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 2 -> openSettings(); 3 -> checkAndUpdate(); 4 -> confirmDeleteApp(); else -> { } }
             } catch (e: Exception) {
                 // Ignore click errors
             }
@@ -1516,6 +1576,35 @@ class MainActivity : Activity() {
             try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); return } catch (e: Exception) { }
         }
         Toast.makeText(this, "Couldn't open the uninstall screen on this TV.", Toast.LENGTH_LONG).show()
+    }
+
+    private fun confirmDeleteApp() {
+        val dlg = Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(u(28f), u(24f), u(28f), u(24f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat(); setColor(0xF01C1C24.toInt()); setStroke(max(1, u(1f)), 0x33FFFFFF)
+            }
+        }
+        panel.addView(tv("Delete TV Home?", 24f, Color.WHITE, true))
+        panel.addView(tv("This will uninstall the app from your TV.", 16f, 0x99FFFFFF.toInt()).apply {
+            setPadding(0, u(8f), 0, u(20f))
+        })
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        val cancel = pill("Cancel", false) { dlg.dismiss() }
+        buttons.addView(cancel, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
+        buttons.addView(pill("Delete", true) { dlg.dismiss(); uninstall(packageName) })
+        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
+        dlg.setContentView(panel)
+        dlg.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(u(520f), WindowManager.LayoutParams.WRAP_CONTENT)
+            setDimAmount(0.65f)
+        }
+        dlg.show()
+        cancel.requestFocus()
     }
 
     // ---------- rename dialog with presets ----------
