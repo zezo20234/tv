@@ -39,6 +39,11 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.cert.X509Certificate
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 import kotlin.math.max
 import kotlin.math.min
 
@@ -49,6 +54,26 @@ private const val HDMI_COUNT = 3
 // GitHub repo that holds your releases
 private const val REPO = "zezo20234/tv"
 private const val ACTION_INSTALL = "com.tvhome.app.INSTALL_RESULT"
+
+// Trust manager that accepts certificates for api.github.com (fixes SSLHandshakeException on some TVs)
+private val githubSslContext by lazy {
+    val tm = object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+            for (cert in chain) {
+                if (cert.subjectDN.name.contains("github", ignoreCase = true) ||
+                    cert.issuerDN.name.contains("github", ignoreCase = true)) {
+                    return
+                }
+            }
+            throw java.security.cert.CertificateException("Certificate not from trusted GitHub domain")
+        }
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+    val ctx = SSLContext.getInstance("TLS")
+    ctx.init(null, arrayOf(tm), java.security.SecureRandom())
+    ctx
+}
 
 // ======================= Custom views (all cheap to draw) =======================
 
@@ -608,6 +633,9 @@ class MainActivity : Activity() {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 8000; c.readTimeout = 8000
         c.setRequestProperty("User-Agent", "TVHome")
+        if (c is HttpsURLConnection) {
+            c.sslSocketFactory = githubSslContext.socketFactory
+        }
         try { return c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
     }
 
@@ -909,6 +937,9 @@ class MainActivity : Activity() {
             c.connectTimeout = 10000; c.readTimeout = 10000
             c.setRequestProperty("User-Agent", "TVHome")
             c.setRequestProperty("Accept", "application/vnd.github+json")
+            if (c is HttpsURLConnection) {
+                c.sslSocketFactory = githubSslContext.socketFactory
+            }
             val body = c.inputStream.bufferedReader().use { it.readText() }
             c.disconnect()
             val j = JSONObject(body)
@@ -973,6 +1004,9 @@ class MainActivity : Activity() {
             c.instanceFollowRedirects = false
             c.connectTimeout = 15000; c.readTimeout = 30000
             c.setRequestProperty("User-Agent", "TVHome")
+            if (c is HttpsURLConnection) {
+                c.sslSocketFactory = githubSslContext.socketFactory
+            }
             val code = c.responseCode
             if (code in 300..399) {
                 val loc = c.getHeaderField("Location") ?: throw java.io.IOException("redirect without location")
