@@ -91,6 +91,7 @@ class HdmiActivity : Activity() {
         title = label("", 22f).apply {
             setPadding((40 * px).toInt(), (28 * px).toInt(), 0, 0)
             setShadowLayer(6f, 0f, 2f, Color.BLACK)
+            visibility = ViewGroup.INVISIBLE
         }
         root.addView(title, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
@@ -98,6 +99,7 @@ class HdmiActivity : Activity() {
         hint = label("Left / Right: try another input      OK: save for $name      Back: return", 17f, false).apply {
             setPadding((24 * px).toInt(), (12 * px).toInt(), (24 * px).toInt(), (12 * px).toInt())
             background = GradientDrawable().apply { cornerRadius = 30f * px; setColor(0x99000000.toInt()) }
+            visibility = ViewGroup.INVISIBLE
         }
         root.addView(hint, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {

@@ -482,14 +482,6 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(installReceiver, f, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(installReceiver, f)
 
-        // Preset HDMI names if not already set
-        if (prefs.getString("name_1", null).isNullOrBlank()) {
-            prefs.edit().putString("name_1", "PLAYSTATION 5 🎮").apply()
-        }
-        if (prefs.getString("name_2", null).isNullOrBlank()) {
-            prefs.edit().putString("name_2", "TV BOX 📺").apply()
-        }
-
         // Auto-check for updates on launch
         Thread {
             if (fetchLatest() && latestBuild > myBuild) {
@@ -1198,7 +1190,11 @@ class MainActivity : Activity() {
                 frame.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
             }
             1 -> {
-                frame.background = GlassDrawable(r, Color.argb(130, 150, 165, 215), Color.argb(80, 70, 85, 135), 0f, false)
+                // Use PlayStation blue color if name contains PLAYSTATION
+                val isPs5 = t.title.contains("PLAYSTATION", ignoreCase = true)
+                val bgColor = if (isPs5) Color.argb(130, 0, 48, 135) else Color.argb(130, 150, 165, 215)
+                val bgEnd = if (isPs5) Color.argb(80, 0, 20, 80) else Color.argb(80, 70, 85, 135)
+                frame.background = GlassDrawable(r, bgColor, bgEnd, 0f, false)
                 val pw = (cardW * 0.40f).toInt()
                 frame.addView(HdmiPortView(this),
                     FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -1222,7 +1218,9 @@ class MainActivity : Activity() {
                         setColor(if (live) 0xFF34C759.toInt() else 0xFF6B7280.toInt())
                     }
                 }, LinearLayout.LayoutParams(u(7f), u(7f)).apply { rightMargin = u(6f) })
-                badge.addView(tv("PORT ${t.n}", 10f, 0xCCFFFFFF.toInt(), true))
+                // Show PS5 emoji instead of PORT for PlayStation preset
+                val badgeText = if (isPs5) "PS5" else "PORT ${t.n}"
+                badge.addView(tv(badgeText, 10f, 0xCCFFFFFF.toInt(), true))
                 frame.addView(badge, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
                     leftMargin = u(9f); topMargin = u(9f)
                 })
@@ -1362,7 +1360,7 @@ class MainActivity : Activity() {
         Toast.makeText(this, "Couldn't open the uninstall screen on this TV.", Toast.LENGTH_LONG).show()
     }
 
-    // ---------- rename dialog ----------
+    // ---------- rename dialog with presets ----------
 
     private fun showRenameDialog(n: Int) {
         val dlg = Dialog(this)
@@ -1375,9 +1373,10 @@ class MainActivity : Activity() {
             }
         }
         panel.addView(tv("Rename HDMI $n", 22f, Color.WHITE, true))
-        panel.addView(tv("e.g. PlayStation 5, Apple TV. Leave empty to reset.", 13f, 0x99FFFFFF.toInt()).apply {
+        panel.addView(tv("Choose a preset or enter a custom name.", 13f, 0x99FFFFFF.toInt()).apply {
             setPadding(0, u(6f), 0, u(16f))
         })
+
         val edit = EditText(this).apply {
             setText(prefs.getString("name_$n", "") ?: "")
             hint = "HDMI $n"
@@ -1394,6 +1393,47 @@ class MainActivity : Activity() {
             }
             setSelection(text.length)
         }
+
+        // Presets
+        val presets = listOf(
+            "PLAYSTATION 5 🎮" to 0xFF003087.toInt(),
+            "TV BOX 📺" to 0xFF1A1A1A.toInt(),
+            "Xbox 🎮" to 0xFF107C10.toInt(),
+            "Nintendo Switch 🎮" to 0xFFE60012.toInt(),
+            "PC 💻" to 0xFF0078D7.toInt(),
+            "Custom" to 0xFF3B4254.toInt()
+        )
+        val presetRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, u(16f))
+        }
+        val presetButtons = ArrayList<TextView>()
+        for ((name, color) in presets) {
+            val btn = TextView(this).apply {
+                text = name
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, u(14f).toFloat())
+                setTextColor(Color.WHITE)
+                setPadding(u(12f), u(8f), u(12f), u(8f))
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    cornerRadius = u(12f).toFloat(); setColor(color)
+                }
+                isFocusable = true
+                isClickable = true
+            }
+            btn.setOnClickListener {
+                presetButtons.forEach { it.alpha = 0.5f }
+                btn.alpha = 1f
+                edit.setText(if (name == "Custom") "" else name)
+                edit.setSelection(edit.text.length)
+            }
+            presetButtons.add(btn)
+            presetRow.addView(btn, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = u(8f) })
+        }
+        presetButtons.first().alpha = 1f
+        panel.addView(presetRow)
+
         panel.addView(edit, LinearLayout.LayoutParams(MATCH, WRAP))
         val save = {
             val txt = edit.text.toString().trim()
