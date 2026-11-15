@@ -6,6 +6,7 @@ import android.media.tv.TvContentRating
 import android.media.tv.TvInputInfo
 import android.media.tv.TvInputManager
 import android.media.tv.TvView
+import android.media.tv.TvView.TvInputCallback
 import android.os.Bundle
 import android.view.KeyEvent
 import android.widget.LinearLayout
@@ -61,7 +62,7 @@ class HdmiActivity : Activity() {
 
         if (inputId != null) {
             try {
-                tvView.setCallback(object : TvView.Callback {
+                tvView.setCallback(object : TvInputCallback {
                     override fun onChannelRetuned(inputId: String, channelNumber: String) {}
                     override fun onVideoAvailable(inputId: String) {}
                     override fun onVideoUnavailable(inputId: String, reason: Int) {}

@@ -3,6 +3,7 @@ package com.realm.tvos
 import android.app.Activity
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Color
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
@@ -221,7 +222,7 @@ class SettingsActivity : Activity() {
             isClickable = true
             setOnClickListener { dialog.dismiss() }
         }
-        panel.addView(closeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply { topMargin = 24 })
+        panel.addView(closeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply { topMargin = 24f })
 
         dialog.setContentView(panel)
         dialog.window?.apply {

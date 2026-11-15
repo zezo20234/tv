@@ -74,7 +74,13 @@ enum class ThemeMode(val displayName: String, val colors: List<Int>) {
     DEEP_OCEAN("Deep Ocean", listOf(0xFF01579B.toInt(), 0xFF0277BD.toInt(), 0xFF006064.toInt(), 0xFF004D40.toInt())),
     SUNSET_GOLD("Sunset Gold", listOf(0xFFBF360C.toInt(), 0xFFE65100.toInt(), 0xFFF57F17.toInt(), 0xFF3E2723.toInt())),
     NEON_CYAN("Neon Cyan", listOf(0xFF006064.toInt(), 0xFF00838F.toInt(), 0xFF0097A7.toInt(), 0xFF00BCD4.toInt())),
-    MIDNIGHT("Midnight", listOf(0xFF212121.toInt(), 0xFF263238.toInt(), 0xFF37474F.toInt(), 0xFF455A64.toInt()))
+    MIDNIGHT("Midnight", listOf(0xFF212121.toInt(), 0xFF263238.toInt(), 0xFF37474F.toInt(), 0xFF455A64.toInt())),
+    VIBRANT_CORAL("Vibrant Coral", listOf(0xFFBF360C.toInt(), 0xFFE91E63.toInt(), 0xFFFF4081.toInt(), 0xFF880E4F.toInt())),
+    ELECTRIC_VIOLET("Electric Violet", listOf(0xFF6A1B9A.toInt(), 0xFF9C27B0.toInt(), 0xFFE91E63.toInt(), 0xFF311B92.toInt())),
+    MYSTIC_TEAL("Mystic Teal", listOf(0xFF004D40.toInt(), 0xFF00796B.toInt(), 0xFF00897B.toInt(), 0xFF01579B.toInt())),
+    AURORA_GREEN("Aurora Green", listOf(0xFF1B5E20.toInt(), 0xFF2E7D32.toInt(), 0xFF4CAF50.toInt(), 0xFF00838F.toInt())),
+    ROYAL_MAROON("Royal Maroon", listOf(0xFF4A0000.toInt(), 0xFF7B0000.toInt(), 0xFFB71C1C.toInt(), 0xFF880E4F.toInt())),
+    ULTRA_VIOLET("Ultra Violet", listOf(0xFF311B92.toInt(), 0xFF4527A0.toInt(), 0xFF7B1FA2.toInt(), 0xFF004D40.toInt()))
 }
 
 class PremiumBackground(ctx: Context) : View(ctx) {
@@ -516,8 +522,8 @@ class MainActivity : Activity() {
     private lateinit var heroUpdate: UpdateIconView
 
     private lateinit var greetingText: TextView
-    private lateinit var clockText: TextView
-    private lateinit var dateText: TextView
+    private var clockText: TextView? = null
+    private var dateText: TextView? = null
     private lateinit var weatherText: TextView
     private lateinit var weatherIcon: WeatherIconView
     private lateinit var wifiIcon: WifiIconView
@@ -736,8 +742,8 @@ class MainActivity : Activity() {
         val timeColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         clockText = tv("", 44f, 0xFFFFFFFF.toInt(), true)
         dateText = tv("", 18f, 0xCCFFFFFF.toInt(), false)
-        timeColumn.addView(clockText)
-        timeColumn.addView(dateText)
+        timeColumn.addView(clockText!!)
+        timeColumn.addView(dateText!!)
         rightSection.addView(timeColumn)
 
         rightSection.addView(View(this).apply { width = u(24f) }, LinearLayout.LayoutParams(WRAP, MATCH))
@@ -764,9 +770,9 @@ class MainActivity : Activity() {
 
     private fun updateClock() {
         val t = clockFmt.format(java.util.Date())
-        if (clockText.text.toString() != t) clockText.text = t
+        if (clockText?.text?.toString() != t) clockText?.text = t
         val d = dateFmt.format(java.util.Date())
-        if (dateText.text.toString() != d) dateText.text = d
+        if (dateText?.text?.toString() != d) dateText?.text = d
     }
 
     private fun updateGreeting() {
@@ -1151,6 +1157,7 @@ class MainActivity : Activity() {
         tiles.forEachIndexed { i, t -> appsRow.addView(buildPremiumCard(t, i < tiles.size - 1)) }
 
         populateRecent(tiles)
+        updateHeroWithRecent(tiles)
         if (currentFocus == null) favRow.getChildAt(0)?.requestFocus()
     }
 
@@ -1159,6 +1166,19 @@ class MainActivity : Activity() {
         val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }.take(8).toSet()
         val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(8)
         recentTiles.forEachIndexed { i, t -> recentRow.addView(buildPremiumCard(t, i < recentTiles.size - 1)) }
+    }
+
+    private fun updateHeroWithRecent(tiles: List<Tile>) {
+        val recentJson = prefs.getString("recent_apps", null) ?: ""
+        val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }
+        if (recentPkgSet.isNotEmpty()) {
+            val mostRecentTile = tiles.firstOrNull { it.pkg == recentPkgSet[0] }
+            if (mostRecentTile != null) {
+                handler.postDelayed({
+                    applyHero(mostRecentTile)
+                }, 200L)
+            }
+        }
     }
 
     private fun addToRecent(pkg: String) {
@@ -1807,21 +1827,28 @@ class MainActivity : Activity() {
             setPadding(0, u(8f), 0, u(24f))
         })
 
-        val themeRow = LinearLayout(this).apply {
+        val themeRow1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, u(10f))
+        }
+        val themeRow2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, u(20f))
         }
         val themeButtons = ArrayList<TextView>()
-        for (theme in ThemeMode.values()) {
+        val themes = ThemeMode.values()
+        for (i in themes.indices) {
+            val theme = themes[i]
             val btn = TextView(this).apply {
                 text = theme.displayName
-                setTextSize(TypedValue.COMPLEX_UNIT_PX, u(14f).toFloat())
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, u(12f).toFloat())
                 setTextColor(Color.WHITE)
-                setPadding(u(16f), u(12f), u(16f), u(12f))
+                setPadding(u(12f), u(10f), u(12f), u(10f))
                 gravity = Gravity.CENTER
                 background = GradientDrawable().apply {
-                    cornerRadius = u(16f).toFloat()
+                    cornerRadius = u(14f).toFloat()
                     setColor(theme.colors[0])
                 }
                 isFocusable = true
@@ -1836,9 +1863,14 @@ class MainActivity : Activity() {
             }
             if (theme == currentThemeMode) btn.alpha = 1f else btn.alpha = 0.5f
             themeButtons.add(btn)
-            themeRow.addView(btn, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = u(10f) })
+            if (i < 6) {
+                themeRow1.addView(btn, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = u(8f) })
+            } else {
+                themeRow2.addView(btn, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = u(8f) })
+            }
         }
-        panel.addView(themeRow)
+        panel.addView(themeRow1)
+        panel.addView(themeRow2)
 
         val buttons = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1850,7 +1882,7 @@ class MainActivity : Activity() {
         dlg.setContentView(panel)
         dlg.window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            setLayout(u(640f), WindowManager.LayoutParams.WRAP_CONTENT)
+            setLayout(u(800f), WindowManager.LayoutParams.WRAP_CONTENT)
             setDimAmount(0.70f)
         }
         dlg.show()
