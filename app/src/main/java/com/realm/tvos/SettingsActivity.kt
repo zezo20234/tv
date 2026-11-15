@@ -19,7 +19,7 @@ class SettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("realm_tvos", MODE_PRIVATE)
+        prefs = getSharedPreferences("realm_tvos_v22", MODE_PRIVATE)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -183,7 +183,7 @@ class SettingsActivity : Activity() {
         })
 
         val info = listOf(
-            "REALM TV OS v21" to "Version",
+            "REALM TV OS v22" to "Version",
             android.os.Build.MODEL to "Device",
             android.os.Build.VERSION.RELEASE to "Android"
         )

@@ -1,4 +1,4 @@
-# REALM TV OS v21
+# REALM TV OS v22
 
 The Ultimate Smart TV Operating System
 
@@ -25,7 +25,7 @@ The Ultimate Smart TV Operating System
 
 1. Navigate to the project directory:
 ```bash
-cd REALM_TV_OS_v21
+cd REALM_TV_OS_v22
 ```
 
 2. Generate gradle wrapper (if needed):
@@ -70,4 +70,4 @@ The result is a completely original, cohesive, premium TV experience.
 
 ## Version
 
-v21 - Initial release with complete feature set
+v22 - Initial release with complete feature set

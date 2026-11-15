@@ -9,11 +9,17 @@ android {
         applicationId = "com.realm.tvos.app"
         minSdk = 21
         targetSdk = 34
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 21) + 20
-        versionName = "21.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 22) + 20
+        versionName = "22.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
     }
     signingConfigs {
         getByName("debug") {
+            storeFile = file("realm_tvos.jks")
+            storePassword = "realm123"
+            keyAlias = "realm"
+            keyPassword = "realm123"
+        }
+        create("release") {
             storeFile = file("realm_tvos.jks")
             storePassword = "realm123"
             keyAlias = "realm"

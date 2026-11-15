@@ -1,13 +1,13 @@
-# REALM TV OS v21 - Project Summary
+# REALM TV OS v22 - Project Summary
 
 ## Overview
 
-REALM TV OS v21 is a premium Android TV launcher that combines the best design elements from Apple tvOS, Samsung Tizen, LG webOS, Google TV, PlayStation 5, and other leading TV operating systems into a cohesive, futuristic experience.
+REALM TV OS v22 is a premium Android TV launcher that combines the best design elements from Apple tvOS, Samsung Tizen, LG webOS, Google TV, PlayStation 5, and other leading TV operating systems into a cohesive, futuristic experience.
 
 ## Project Structure
 
 ```
-REALM_TV_OS_v21/
+REALM_TV_OS_v22/
 ├── app/
 │   ├── src/
 │   │   └── main/

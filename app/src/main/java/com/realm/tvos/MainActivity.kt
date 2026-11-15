@@ -606,7 +606,7 @@ class MainActivity : Activity() {
         val dm = resources.displayMetrics
         W = dm.widthPixels
         H = dm.heightPixels
-        prefs = getSharedPreferences("realm_tvos", MODE_PRIVATE)
+        prefs = getSharedPreferences("realm_tvos_v22", MODE_PRIVATE)
         tim = getSystemService(Context.TV_INPUT_SERVICE) as? TvInputManager
 
         val savedTheme = prefs.getString("theme_mode", null)

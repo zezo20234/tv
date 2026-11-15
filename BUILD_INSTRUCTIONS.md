@@ -1,4 +1,4 @@
-# Build Instructions for REALM TV OS v21
+# Build Instructions for REALM TV OS v22
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ The project includes Gradle wrapper configuration. To initialize it:
 
 ### Option 1: Using installed Gradle
 ```bash
-cd REALM_TV_OS_v21
+cd REALM_TV_OS_v22
 gradle wrapper --gradle-version 8.5
 ```
 
@@ -45,21 +45,21 @@ Invoke-WebRequest -Uri "https://services.gradle.org/distributions/gradle-8.5-bin
 
 **Linux/Mac:**
 ```bash
-cd REALM_TV_OS_v21
+cd REALM_TV_OS_v22
 chmod +x gradlew
 ./gradlew assembleDebug
 ```
 
 **Windows:**
 ```cmd
-cd REALM_TV_OS_v21
+cd REALM_TV_OS_v22
 gradlew.bat assembleDebug
 ```
 
 ### Using Installed Gradle
 
 ```bash
-cd REALM_TV_OS_v21
+cd REALM_TV_OS_v22
 gradle assembleDebug
 ```
 
@@ -134,7 +134,7 @@ app/build/outputs/apk/release/app-release.apk
 
 ## Performance Notes
 
-REALM TV OS v21 is optimized for low-end Android TV hardware like the X96Q. The implementation includes:
+REALM TV OS v22 is optimized for low-end Android TV hardware like the X96Q. The implementation includes:
 - Lightweight custom views (no heavy dependencies)
 - Optimized bitmap operations
 - Efficient animation system
