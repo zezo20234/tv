@@ -330,6 +330,41 @@ class UpdateView(ctx: Context) : View(ctx) {
     }
 }
 
+class Ps5LogoView(ctx: Context) : View(ctx) {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL; color = Color.WHITE
+    }
+    override fun onDraw(c: Canvas) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val cx = w / 2f
+        val cy = h / 2f
+        val scale = min(w, h) / 100f
+
+        // Draw simplified PS5 logo shapes
+        // Top shape
+        val path = Path()
+        path.moveTo(cx - 30f * scale, cy - 25f * scale)
+        path.lineTo(cx - 10f * scale, cy - 35f * scale)
+        path.lineTo(cx + 10f * scale, cy - 25f * scale)
+        path.lineTo(cx + 30f * scale, cy - 15f * scale)
+        path.lineTo(cx + 10f * scale, cy - 5f * scale)
+        path.lineTo(cx - 10f * scale, cy - 15f * scale)
+        path.close()
+        c.drawPath(path, p)
+
+        // Bottom shape
+        val path2 = Path()
+        path2.moveTo(cx - 30f * scale, cy + 5f * scale)
+        path2.lineTo(cx - 10f * scale, cy - 5f * scale)
+        path2.lineTo(cx + 10f * scale, cy + 5f * scale)
+        path2.lineTo(cx + 30f * scale, cy + 15f * scale)
+        path2.lineTo(cx + 10f * scale, cy + 25f * scale)
+        path2.lineTo(cx - 10f * scale, cy + 15f * scale)
+        path2.close()
+        c.drawPath(path2, p)
+    }
+}
+
 // ======================= Activity =======================
 
 class MainActivity : Activity() {
@@ -518,21 +553,6 @@ class MainActivity : Activity() {
         super.onNewIntent(intent)
         shelves.scrollTo(0, 0)
         favRow.getChildAt(0)?.requestFocus()
-    }
-
-    // Menu / Info button on the remote = same as holding OK (for remotes where holding OK does nothing)
-    override fun dispatchKeyEvent(e: KeyEvent): Boolean {
-        if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0 &&
-            (e.keyCode == KeyEvent.KEYCODE_MENU || e.keyCode == KeyEvent.KEYCODE_INFO)) {
-            val t = currentFocus?.tag as? Tile
-            if (t != null) {
-                when (t.kind) {
-                    1 -> { showRenameDialog(t.n); return true }
-                    0 -> { confirmUninstall(t); return true }
-                }
-            }
-        }
-        return super.dispatchKeyEvent(e)
     }
 
     @Suppress("OVERRIDE_DEPRECATION")
@@ -803,7 +823,7 @@ class MainActivity : Activity() {
         val icon: Drawable? = try { a.ri.loadIcon(pm) } catch (e: Exception) { null }
         val color = cardColor(banner ?: icon, a.pkg)
         val art = composeArt(banner, icon, color, (cardW * 1.25f).toInt(), (cardH * 1.25f).toInt())
-        return Tile(0, a.label, "Press OK to open   ·   Hold OK or press Menu to uninstall", color, art, a.pkg, a.cls)
+        return Tile(0, a.label, "Press OK to open   ·   Hold OK to uninstall", color, art, a.pkg, a.cls)
     }
 
     private fun composeArt(banner: Drawable?, icon: Drawable?, color: Int, w: Int, h: Int): Bitmap {
@@ -925,7 +945,11 @@ class MainActivity : Activity() {
     // ---------- HDMI ----------
 
     private fun hdmiName(n: Int): String =
-        prefs.getString("name_$n", null)?.takeIf { it.isNotBlank() } ?: "HDMI $n"
+        prefs.getString("name_$n", null)?.takeIf { it.isNotBlank() } ?: when (n) {
+            2 -> "PLAYSTATION 5 🎮"
+            3 -> "TV BOX 📺"
+            else -> "HDMI $n"
+        }
 
     private fun hwNumber(id: String): Int =
         Regex("HW(\\d+)$").find(id)?.groupValues?.get(1)?.toIntOrNull() ?: Int.MAX_VALUE
@@ -953,7 +977,7 @@ class MainActivity : Activity() {
         for (n in 1..HDMI_COUNT) {
             val id = inputIdFor(n)
             inputsRow.addView(buildCard(
-                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK for the TV's input list, hold OK or press Menu to rename",
+                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK for the TV's input list, hold OK to rename",
                     0xFF2C3550.toInt(), null, id, "", n), true))
         }
         inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
@@ -966,43 +990,7 @@ class MainActivity : Activity() {
 
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
 
-    /** MStar TVs: switch the TV's real input source directly. Returns null on success, otherwise why it failed. */
-    private fun mstarSetSource(n: Int): String? {
-        return try {
-            val cls = Class.forName("com.mstar.android.tv.TvCommonManager")
-            val tcm = try {
-                cls.getMethod("getInstance").invoke(null)
-            } catch (e: NoSuchMethodException) {
-                cls.getMethod("getInstance", Context::class.java).invoke(null, this)
-            }
-            val field = if (n <= 1) "INPUT_SOURCE_HDMI" else "INPUT_SOURCE_HDMI$n"
-            val src = cls.getField(field).getInt(null)
-            cls.getMethod("setInputSource", Int::class.javaPrimitiveType).invoke(tcm, src)
-            null
-        } catch (e: Throwable) {
-            e.javaClass.simpleName + (e.cause?.let { "/" + it.javaClass.simpleName } ?: "")
-        }
-    }
-
-    /** After the source is switched, bring up the TV's own player screen so the picture is visible. */
-    private fun showMstarVideo(): Boolean {
-        val attempts = ArrayList<Intent>()
-        attempts.add(Intent("mstar.tvsetting.ui.intent.action.RootActivity").putExtra("task_tag", "input_source_changed"))
-        attempts.add(Intent().setClassName("com.mstar.tv.tvplayer.ui", "com.mstar.tv.tvplayer.ui.RootActivity"))
-        packageManager.getLaunchIntentForPackage("com.mstar.tv.tvplayer.ui")?.let { attempts.add(it) }
-        for (i in attempts) {
-            try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); return true } catch (e: Exception) { }
-        }
-        return false
-    }
-
     private fun openHdmi(t: Tile) {
-        // 0) MStar TVs: switch straight to this HDMI port, no menu
-        val why = mstarSetSource(t.n)
-        if (why == null && showMstarVideo()) {
-            Toast.makeText(this, "Switching to ${t.title}…", Toast.LENGTH_SHORT).show()
-            return
-        }
         // 1) Try the built-in HDMI viewer directly (no input menu)
         if (tifWorks()) {
             try {
@@ -1021,16 +1009,7 @@ class MainActivity : Activity() {
                 return
             } catch (e: Exception) { /* fall through */ }
         }
-        // 3) MStar TVs (like yours): open the TV's own input list, no setup needed
-        try {
-            Toast.makeText(this, "Direct switch unavailable (${why ?: "player screen not found"}). Showing the TV's input list.",
-                Toast.LENGTH_LONG).show()
-            startActivity(Intent(Intent.ACTION_MAIN)
-                .setClassName("com.mstar.tvsetting", "com.mstar.tvsetting.inputsource.InputSourceActivity")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return
-        } catch (e: Exception) { /* not an MStar TV */ }
-        // 4) Last resort: show Finder to help user set up input app
+        // 3) Last resort: show Finder to help user set up input app
         Toast.makeText(this, "Please use Find Inputs to set up HDMI switching.", Toast.LENGTH_LONG).show()
         startActivity(Intent(this, FinderActivity::class.java))
     }
@@ -1298,14 +1277,22 @@ class MainActivity : Activity() {
             1 -> {
                 // Use PlayStation blue color if name contains PLAYSTATION
                 val isPs5 = t.title.contains("PLAYSTATION", ignoreCase = true)
-                val bgColor = if (isPs5) Color.argb(130, 0, 48, 135) else Color.argb(130, 150, 165, 215)
-                val bgEnd = if (isPs5) Color.argb(80, 0, 20, 80) else Color.argb(80, 70, 85, 135)
+                val bgColor = if (isPs5) Color.argb(180, 0, 48, 135) else Color.argb(130, 150, 165, 215)
+                val bgEnd = if (isPs5) Color.argb(120, 0, 20, 80) else Color.argb(80, 70, 85, 135)
                 frame.background = GlassDrawable(r, bgColor, bgEnd, 0f, false)
                 val pw = (cardW * 0.40f).toInt()
-                frame.addView(HdmiPortView(this),
-                    FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-                        topMargin = (cardH * 0.26f).toInt()
-                    })
+                // Use PS5 logo for PlayStation, HDMI port for others
+                if (isPs5) {
+                    frame.addView(Ps5LogoView(this),
+                        FrameLayout.LayoutParams(pw, (pw * 0.50f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                            topMargin = (cardH * 0.24f).toInt()
+                        })
+                } else {
+                    frame.addView(HdmiPortView(this),
+                        FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                            topMargin = (cardH * 0.26f).toInt()
+                        })
+                }
                 frame.addView(tv(t.title, 15f, Color.WHITE, true).apply {
                     maxLines = 1; ellipsize = TextUtils.TruncateAt.END; gravity = Gravity.CENTER
                 }, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply {
@@ -1324,7 +1311,7 @@ class MainActivity : Activity() {
                         setColor(if (live) 0xFF34C759.toInt() else 0xFF6B7280.toInt())
                     }
                 }, LinearLayout.LayoutParams(u(7f), u(7f)).apply { rightMargin = u(6f) })
-                // Show PS5 emoji instead of PORT for PlayStation preset
+                // Show PS5 text instead of PORT for PlayStation preset
                 val badgeText = if (isPs5) "PS5" else "PORT ${t.n}"
                 badge.addView(tv(badgeText, 10f, 0xCCFFFFFF.toInt(), true))
                 frame.addView(badge, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
@@ -1396,7 +1383,6 @@ class MainActivity : Activity() {
         box.addView(label, LinearLayout.LayoutParams(cardW, WRAP))
         box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
 
-        box.tag = t
         box.setOnClickListener {
             when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); 4 -> startActivity(Intent(this, FinderActivity::class.java)); else -> openSettings() }
         }
