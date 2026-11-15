@@ -405,7 +405,7 @@ class Ps5LogoView(ctx: Context) : View(ctx) {
     }
 }
 
-/** Options/Settings button icon */
+/** Options/Settings button icon - hamburger menu */
 class OptionsView(ctx: Context) : View(ctx) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -485,7 +485,6 @@ class MainActivity : Activity() {
     private val myBuild: Int by lazy { currentBuild() }
     private lateinit var staticBg: StaticBackground
     private var currentColorMode: ColorMode = ColorMode.BLUE
-    private lateinit var optionsBtn: FrameLayout
 
     private val installReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -666,19 +665,7 @@ class MainActivity : Activity() {
         timeCol.addView(clockText)
         timeCol.addView(dateText)
         right.addView(timeCol)
-        bar.addView(right, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
-
-        // Options button
-        optionsBtn = FrameLayout(this).apply {
-            background = GlassDrawable(u(34f).toFloat(), Color.argb(70, 255, 255, 255), Color.argb(32, 255, 255, 255), 0.9f, true)
-            setPadding(u(16f), u(12f), u(16f), u(12f))
-            isFocusable = true
-            isClickable = true
-            addView(OptionsView(this@MainActivity), FrameLayout.LayoutParams(u(32f), u(32f), Gravity.CENTER))
-            setOnClickListener { showColorModeDialog() }
-        }
-        bar.addView(optionsBtn, LinearLayout.LayoutParams(WRAP, WRAP))
-
+        bar.addView(right, LinearLayout.LayoutParams(WRAP, WRAP))
         updateGreeting()
         updateClock()
         return bar
@@ -738,7 +725,15 @@ class MainActivity : Activity() {
     private fun applyHero(t: Tile) {
         heroTitle.text = t.title
         heroSub.text = t.subtitle
-        heroBtn.text = when (t.kind) { 0 -> "Open"; 1 -> "Choose input"; 2 -> "Settings"; 3 -> "Update"; else -> "Find inputs" }
+        heroBtn.text = when (t.kind) {
+            0 -> "Open"
+            1 -> "Choose input"
+            2 -> "Settings"
+            3 -> "Update"
+            5 -> "Open options"
+            6 -> "Uninstall"
+            else -> "Find inputs"
+        }
         heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
         heroPort.visibility = if (t.kind == 1 || t.kind == 4) View.VISIBLE else View.INVISIBLE
         heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
@@ -1068,9 +1063,11 @@ class MainActivity : Activity() {
                     color, null, id, "", n), true))
         }
         inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
+        inputsRow.addView(buildCard(Tile(5, "OPTIONS", "Color themes and UI settings", 0xFF6B21A8.toInt(), null), true))
         val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
                   else "Press OK to download the latest version from GitHub"
         inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))
+        inputsRow.addView(buildCard(Tile(6, "DELETE UI", "Uninstall TV Home app", 0xFFDC2626.toInt(), null), true))
         inputsRow.addView(buildCard(Tile(4, "Find inputs", "Find the app that switches your TV's HDMI inputs", 0xFF2F4A3C.toInt(), null), false))
         if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
     }
@@ -1112,6 +1109,19 @@ class MainActivity : Activity() {
             try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); return } catch (e: Exception) { }
         }
         Toast.makeText(this, "Couldn't open Settings on this TV.", Toast.LENGTH_LONG).show()
+    }
+
+    private fun uninstallApp() {
+        val uri = Uri.parse("package:$packageName")
+        val attempts = listOf(Intent(Intent.ACTION_UNINSTALL_PACKAGE, uri), Intent(Intent.ACTION_DELETE, uri))
+        for (i in attempts) {
+            try {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(i)
+                return
+            } catch (e: Exception) { }
+        }
+        Toast.makeText(this, "Couldn't open uninstall screen", Toast.LENGTH_SHORT).show()
     }
 
     // ---------- in-app updater (GitHub releases) ----------
@@ -1453,36 +1463,33 @@ class MainActivity : Activity() {
                         topMargin = u(9f); rightMargin = u(9f)
                     })
                 }
-                // Add red delete button that uninstalls the app itself
-                val deleteBtn = TextView(this).apply {
+            }
+            5 -> {
+                // OPTIONS card
+                frame.background = GlassDrawable(r, Color.argb(200, 107, 33, 168), Color.argb(150, 88, 28, 135), 0f, false)
+                val gs = (cardH * 0.42f).toInt()
+                frame.addView(OptionsView(this),
+                    FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                        topMargin = (cardH * 0.16f).toInt()
+                    })
+                frame.addView(tv("OPTIONS", 15f, Color.WHITE, true).apply { gravity = Gravity.CENTER },
+                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
+            }
+            6 -> {
+                // DELETE UI card
+                frame.background = GlassDrawable(r, Color.argb(220, 220, 38, 38), Color.argb(180, 185, 28, 28), 0f, false)
+                val gs = (cardH * 0.42f).toInt()
+                val deleteIcon = TextView(this).apply {
                     text = "×"
-                    setTextSize(TypedValue.COMPLEX_UNIT_PX, u(24f).toFloat())
+                    setTextSize(TypedValue.COMPLEX_UNIT_PX, u(60f).toFloat())
                     setTextColor(Color.WHITE)
                     gravity = Gravity.CENTER
-                    setPadding(u(6f), u(4f), u(6f), u(4f))
-                    background = GradientDrawable().apply {
-                        cornerRadius = u(16f).toFloat()
-                        setColor(0xFFFF3B30.toInt())
-                    }
-                    isFocusable = true
-                    isClickable = true
-                    setOnClickListener {
-                        // Uninstall this app
-                        val uri = Uri.parse("package:$packageName")
-                        val attempts = listOf(Intent(Intent.ACTION_UNINSTALL_PACKAGE, uri), Intent(Intent.ACTION_DELETE, uri))
-                        for (i in attempts) {
-                            try {
-                                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                startActivity(i)
-                                return@setOnClickListener
-                            } catch (e: Exception) { }
-                        }
-                        Toast.makeText(this@MainActivity, "Couldn't open uninstall screen", Toast.LENGTH_SHORT).show()
-                    }
                 }
-                frame.addView(deleteBtn, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
-                    topMargin = u(9f); leftMargin = u(9f)
+                frame.addView(deleteIcon, FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                    topMargin = (cardH * 0.12f).toInt()
                 })
+                frame.addView(tv("DELETE UI", 15f, Color.WHITE, true).apply { gravity = Gravity.CENTER },
+                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
             }
             else -> {
                 frame.background = GlassDrawable(r, Color.argb(130, 160, 165, 180), Color.argb(80, 75, 80, 100), 0f, false)
@@ -1522,7 +1529,15 @@ class MainActivity : Activity() {
         box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
 
         box.setOnClickListener {
-            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); 4 -> startActivity(Intent(this, FinderActivity::class.java)); else -> openSettings() }
+            when (t.kind) {
+                0 -> launchApp(t)
+                1 -> openHdmi(t)
+                3 -> checkAndUpdate()
+                4 -> startActivity(Intent(this, FinderActivity::class.java))
+                5 -> showColorModeDialog()
+                6 -> uninstallApp()
+                else -> openSettings()
+            }
         }
         if (t.kind == 1) {
             box.isLongClickable = true
