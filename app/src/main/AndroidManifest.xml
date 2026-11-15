@@ -13,6 +13,9 @@
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
+        <!-- MStar system libraries (optional: ignored on TVs that don't have them) -->
+        <uses-library android:name="com.mstar.android" android:required="false" />
+        <uses-library android:name="mstar-tv" android:required="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

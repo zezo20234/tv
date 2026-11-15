@@ -1,6 +1,10 @@
 package com.tvhome
 
 import android.app.Activity
+import android.app.Dialog
+import android.graphics.drawable.ColorDrawable
+import android.view.Gravity
+import android.view.Window
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -121,7 +125,7 @@ class FinderActivity : Activity() {
         }
         for (c in found) {
             val short = c.cls.substringAfterLast('.')
-            list.addView(item(short, c.pkg + "  /  " + c.cls, { open(c) }, { save(c) }))
+            list.addView(item(short, c.pkg + "  /  " + c.cls, { choose(c) }, { save(c) }))
         }
         list.getChildAt(0)?.requestFocus()
     }
@@ -153,6 +157,52 @@ class FinderActivity : Activity() {
     }
 
     private fun item(title: String, sub: String, onClick: () -> Unit): TextView = item(title, sub, onClick, null)
+
+    /** Tap an entry: a small menu with real buttons, so nobody has to hold OK. */
+    private fun choose(c: Cand) {
+        val dlg = Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding((28 * px).toInt(), (24 * px).toInt(), (28 * px).toInt(), (24 * px).toInt())
+            background = GradientDrawable().apply { cornerRadius = 28f * px; setColor(0xF01C1C24.toInt()) }
+        }
+        panel.addView(tv(c.cls.substringAfterLast('.'), 22f, Color.WHITE, true))
+        panel.addView(tv(c.pkg, 14f, 0x99FFFFFF.toInt()).apply { setPadding(0, (4 * px).toInt(), 0, (16 * px).toInt()) })
+
+        fun btn(text: String, primary: Boolean, onClick: () -> Unit): TextView {
+            val b = tv(text, 17f, Color.WHITE, true)
+            fun paint(f: Boolean) {
+                b.background = GradientDrawable().apply {
+                    cornerRadius = 30f * px
+                    setColor(if (f) Color.WHITE else if (primary) 0xFF0A84FF.toInt() else 0x33FFFFFF)
+                }
+                b.setTextColor(if (f) Color.BLACK else Color.WHITE)
+            }
+            b.gravity = Gravity.CENTER
+            b.isFocusable = true
+            b.isClickable = true
+            b.setPadding((26 * px).toInt(), (11 * px).toInt(), (26 * px).toInt(), (11 * px).toInt())
+            paint(false)
+            b.setOnFocusChangeListener { _, f -> paint(f) }
+            b.setOnClickListener { onClick() }
+            b.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = (10 * px).toInt() }
+            return b
+        }
+        val use = btn("Use this for the HDMI cards", true) { dlg.dismiss(); save(c) }
+        panel.addView(use)
+        panel.addView(btn("Open it to test", false) { dlg.dismiss(); open(c) })
+        panel.addView(btn("Cancel", false) { dlg.dismiss() })
+        dlg.setContentView(panel)
+        dlg.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout((560 * px).toInt(), android.view.WindowManager.LayoutParams.WRAP_CONTENT)
+            setDimAmount(0.65f)
+        }
+        dlg.show()
+        use.requestFocus()
+    }
 
     private fun open(c: Cand) {
         try {

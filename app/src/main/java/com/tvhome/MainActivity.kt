@@ -520,6 +520,21 @@ class MainActivity : Activity() {
         favRow.getChildAt(0)?.requestFocus()
     }
 
+    // Menu / Info button on the remote = same as holding OK (for remotes where holding OK does nothing)
+    override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        if (e.action == KeyEvent.ACTION_DOWN && e.repeatCount == 0 &&
+            (e.keyCode == KeyEvent.KEYCODE_MENU || e.keyCode == KeyEvent.KEYCODE_INFO)) {
+            val t = currentFocus?.tag as? Tile
+            if (t != null) {
+                when (t.kind) {
+                    1 -> { showRenameDialog(t.n); return true }
+                    0 -> { confirmUninstall(t); return true }
+                }
+            }
+        }
+        return super.dispatchKeyEvent(e)
+    }
+
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() { /* launcher: stay home */ }
 
@@ -788,7 +803,7 @@ class MainActivity : Activity() {
         val icon: Drawable? = try { a.ri.loadIcon(pm) } catch (e: Exception) { null }
         val color = cardColor(banner ?: icon, a.pkg)
         val art = composeArt(banner, icon, color, (cardW * 1.25f).toInt(), (cardH * 1.25f).toInt())
-        return Tile(0, a.label, "Press OK to open   ·   Hold OK to uninstall", color, art, a.pkg, a.cls)
+        return Tile(0, a.label, "Press OK to open   ·   Hold OK or press Menu to uninstall", color, art, a.pkg, a.cls)
     }
 
     private fun composeArt(banner: Drawable?, icon: Drawable?, color: Int, w: Int, h: Int): Bitmap {
@@ -938,7 +953,7 @@ class MainActivity : Activity() {
         for (n in 1..HDMI_COUNT) {
             val id = inputIdFor(n)
             inputsRow.addView(buildCard(
-                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK for the TV's input list, hold OK to rename",
+                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK for the TV's input list, hold OK or press Menu to rename",
                     0xFF2C3550.toInt(), null, id, "", n), true))
         }
         inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
@@ -951,7 +966,43 @@ class MainActivity : Activity() {
 
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
 
+    /** MStar TVs: switch the TV's real input source directly. Returns null on success, otherwise why it failed. */
+    private fun mstarSetSource(n: Int): String? {
+        return try {
+            val cls = Class.forName("com.mstar.android.tv.TvCommonManager")
+            val tcm = try {
+                cls.getMethod("getInstance").invoke(null)
+            } catch (e: NoSuchMethodException) {
+                cls.getMethod("getInstance", Context::class.java).invoke(null, this)
+            }
+            val field = if (n <= 1) "INPUT_SOURCE_HDMI" else "INPUT_SOURCE_HDMI$n"
+            val src = cls.getField(field).getInt(null)
+            cls.getMethod("setInputSource", Int::class.javaPrimitiveType).invoke(tcm, src)
+            null
+        } catch (e: Throwable) {
+            e.javaClass.simpleName + (e.cause?.let { "/" + it.javaClass.simpleName } ?: "")
+        }
+    }
+
+    /** After the source is switched, bring up the TV's own player screen so the picture is visible. */
+    private fun showMstarVideo(): Boolean {
+        val attempts = ArrayList<Intent>()
+        attempts.add(Intent("mstar.tvsetting.ui.intent.action.RootActivity").putExtra("task_tag", "input_source_changed"))
+        attempts.add(Intent().setClassName("com.mstar.tv.tvplayer.ui", "com.mstar.tv.tvplayer.ui.RootActivity"))
+        packageManager.getLaunchIntentForPackage("com.mstar.tv.tvplayer.ui")?.let { attempts.add(it) }
+        for (i in attempts) {
+            try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); return true } catch (e: Exception) { }
+        }
+        return false
+    }
+
     private fun openHdmi(t: Tile) {
+        // 0) MStar TVs: switch straight to this HDMI port, no menu
+        val why = mstarSetSource(t.n)
+        if (why == null && showMstarVideo()) {
+            Toast.makeText(this, "Switching to ${t.title}…", Toast.LENGTH_SHORT).show()
+            return
+        }
         // 1) Try the built-in HDMI viewer directly (no input menu)
         if (tifWorks()) {
             try {
@@ -970,7 +1021,16 @@ class MainActivity : Activity() {
                 return
             } catch (e: Exception) { /* fall through */ }
         }
-        // 3) Last resort: show Finder to help user set up input app
+        // 3) MStar TVs (like yours): open the TV's own input list, no setup needed
+        try {
+            Toast.makeText(this, "Direct switch unavailable (${why ?: "player screen not found"}). Showing the TV's input list.",
+                Toast.LENGTH_LONG).show()
+            startActivity(Intent(Intent.ACTION_MAIN)
+                .setClassName("com.mstar.tvsetting", "com.mstar.tvsetting.inputsource.InputSourceActivity")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        } catch (e: Exception) { /* not an MStar TV */ }
+        // 4) Last resort: show Finder to help user set up input app
         Toast.makeText(this, "Please use Find Inputs to set up HDMI switching.", Toast.LENGTH_LONG).show()
         startActivity(Intent(this, FinderActivity::class.java))
     }
@@ -1336,6 +1396,7 @@ class MainActivity : Activity() {
         box.addView(label, LinearLayout.LayoutParams(cardW, WRAP))
         box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
 
+        box.tag = t
         box.setOnClickListener {
             when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); 4 -> startActivity(Intent(this, FinderActivity::class.java)); else -> openSettings() }
         }
