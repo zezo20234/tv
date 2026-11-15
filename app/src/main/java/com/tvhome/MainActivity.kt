@@ -352,6 +352,7 @@ class MainActivity : Activity() {
 
     private lateinit var shelves: ScrollView
     private lateinit var favRow: LinearLayout
+    private lateinit var recentRow: LinearLayout
     private lateinit var inputsRow: LinearLayout
     private lateinit var appsRow: LinearLayout
     private lateinit var heroTitle: TextView
@@ -460,9 +461,10 @@ class MainActivity : Activity() {
         col.addView(buildTopBar(), LinearLayout.LayoutParams(MATCH, WRAP))
         col.addView(buildHero(), LinearLayout.LayoutParams(MATCH, (H * 0.33f).toInt()))
 
-        favRow = row(); inputsRow = row(); appsRow = row()
+        favRow = row(); recentRow = row(); inputsRow = row(); appsRow = row()
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
         content.addView(header("Favorites")); content.addView(shelf(favRow))
+        content.addView(header("Recent")); content.addView(shelf(recentRow))
         content.addView(header("Inputs")); content.addView(shelf(inputsRow))
         content.addView(header("All Apps")); content.addView(shelf(appsRow))
         shelves = ScrollView(this).apply {
@@ -479,6 +481,23 @@ class MainActivity : Activity() {
         val f = IntentFilter(ACTION_INSTALL)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(installReceiver, f, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(installReceiver, f)
+
+        // Preset HDMI names if not already set
+        if (prefs.getString("name_1", null).isNullOrBlank()) {
+            prefs.edit().putString("name_1", "PLAYSTATION 5 🎮").apply()
+        }
+        if (prefs.getString("name_2", null).isNullOrBlank()) {
+            prefs.edit().putString("name_2", "TV BOX 📺").apply()
+        }
+
+        // Auto-check for updates on launch
+        Thread {
+            if (fetchLatest() && latestBuild > myBuild) {
+                runOnUiThread {
+                    showUpdateDialog()
+                }
+            }
+        }.start()
     }
 
     override fun onDestroy() {
@@ -806,14 +825,30 @@ class MainActivity : Activity() {
     }
 
     private fun populateApps(tiles: List<Tile>) {
-        favRow.removeAllViews(); appsRow.removeAllViews()
+        favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews()
         val favs = pickFavorites(tiles)
         favs.forEachIndexed { i, t -> favRow.addView(buildCard(t, i < favs.size - 1)) }
         tiles.forEachIndexed { i, t -> appsRow.addView(buildCard(t, i < tiles.size - 1)) }
+        populateRecent(tiles)
         if (currentFocus == null) favRow.getChildAt(0)?.requestFocus()
     }
 
+    private fun populateRecent(tiles: List<Tile>) {
+        val recentJson = prefs.getString("recent_apps", null) ?: ""
+        val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }.take(6).toSet()
+        val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(6)
+        recentTiles.forEachIndexed { i, t -> recentRow.addView(buildCard(t, i < recentTiles.size - 1)) }
+    }
+
+    private fun addToRecent(pkg: String) {
+        val current = prefs.getString("recent_apps", "") ?: ""
+        val parts = current.split(",").filter { it.isNotBlank() && it != pkg }.take(5)
+        val updated = listOf(pkg) + parts
+        prefs.edit().putString("recent_apps", updated.joinToString(",")).apply()
+    }
+
     private fun launchApp(t: Tile) {
+        addToRecent(t.pkg)
         try {
             startActivity(Intent(Intent.ACTION_MAIN).setClassName(t.pkg, t.cls)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
@@ -873,7 +908,15 @@ class MainActivity : Activity() {
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
 
     private fun openHdmi(t: Tile) {
-        // 1) an app the user picked in Input Finder
+        // 1) Try the built-in HDMI viewer directly (no input menu)
+        if (tifWorks()) {
+            try {
+                startActivity(Intent(this, HdmiActivity::class.java)
+                    .putExtra("input_id", t.pkg).putExtra("name", t.title).putExtra("n", t.n))
+                return
+            } catch (e: Exception) { /* fall through */ }
+        }
+        // 2) Fallback to saved input app from Input Finder
         val saved = prefs.getString("input_app", null)
         if (!saved.isNullOrBlank() && saved.contains("/")) {
             try {
@@ -883,24 +926,8 @@ class MainActivity : Activity() {
                 return
             } catch (e: Exception) { /* fall through */ }
         }
-        // 1b) MStar TVs: open the TV's own input list
-        try {
-            startActivity(Intent(Intent.ACTION_MAIN)
-                .setClassName("com.mstar.tvsetting", "com.mstar.tvsetting.inputsource.InputSourceActivity")
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return
-        } catch (e: Exception) { /* not an MStar TV */ }
-        // 2) the TV shares its inputs with apps: use the built-in HDMI viewer
-        if (tifWorks()) {
-            try {
-                startActivity(Intent(this, HdmiActivity::class.java)
-                    .putExtra("input_id", t.pkg).putExtra("name", t.title).putExtra("n", t.n))
-                return
-            } catch (e: Exception) { /* fall through */ }
-        }
-        // 3) it doesn't: help find the TV's own input app
-        Toast.makeText(this, "This TV doesn't share its inputs with apps. Pick the app that switches inputs.",
-            Toast.LENGTH_LONG).show()
+        // 3) Last resort: show Finder to help user set up input app
+        Toast.makeText(this, "Please use Find Inputs to set up HDMI switching.", Toast.LENGTH_LONG).show()
         startActivity(Intent(this, FinderActivity::class.java))
     }
 
@@ -970,6 +997,35 @@ class MainActivity : Activity() {
         try { progressDlg?.dismiss() } catch (e: Exception) { }
         progressDlg = null
         progressTv = null
+    }
+
+    private fun showUpdateDialog() {
+        val dlg = Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(u(28f), u(24f), u(28f), u(24f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat(); setColor(0xF01C1C24.toInt()); setStroke(max(1, u(1f)), 0x33FFFFFF)
+            }
+        }
+        panel.addView(tv("Update Available", 24f, Color.WHITE, true))
+        panel.addView(tv("Build $latestBuild is ready to install.", 16f, 0x99FFFFFF.toInt()).apply {
+            setPadding(0, u(8f), 0, u(20f))
+        })
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        val cancel = pill("Later", false) { dlg.dismiss() }
+        buttons.addView(cancel, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
+        buttons.addView(pill("Update Now", true) { dlg.dismiss(); downloadAndInstall(latestUrl ?: return@pill) })
+        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
+        dlg.setContentView(panel)
+        dlg.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(u(520f), WindowManager.LayoutParams.WRAP_CONTENT)
+            setDimAmount(0.65f)
+        }
+        dlg.show()
+        cancel.requestFocus()
     }
 
     private fun checkAndUpdate() {
