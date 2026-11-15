@@ -1,12 +1,7 @@
 package com.realm.tvos
 
 import android.app.Activity
-import android.graphics.Color
-import android.media.tv.TvContentRating
-import android.media.tv.TvInputInfo
-import android.media.tv.TvInputManager
 import android.media.tv.TvView
-import android.media.tv.TvView.TvInputCallback
 import android.os.Bundle
 import android.view.KeyEvent
 import android.widget.LinearLayout
@@ -19,7 +14,6 @@ class HdmiActivity : Activity() {
     private var inputId: String? = null
     private var inputName: String? = null
     private var inputNumber: Int = 0
-    private var tim: TvInputManager? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,7 +21,6 @@ class HdmiActivity : Activity() {
         inputId = intent.getStringExtra("input_id")
         inputName = intent.getStringExtra("name")
         inputNumber = intent.getIntExtra("n", 0)
-        tim = getSystemService(android.content.Context.TV_INPUT_SERVICE) as? TvInputManager
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -62,14 +55,6 @@ class HdmiActivity : Activity() {
 
         if (inputId != null) {
             try {
-                tvView.setCallback(object : TvInputCallback {
-                    override fun onChannelRetuned(inputId: String, channelNumber: String) {}
-                    override fun onVideoAvailable(inputId: String) {}
-                    override fun onVideoUnavailable(inputId: String, reason: Int) {}
-                    override fun onContentAllowed(inputId: String) {}
-                    override fun onContentBlocked(inputId: String, rating: TvContentRating) {}
-                    override fun onTrackSelected(inputId: String, type: Int, trackId: String) {}
-                })
                 tvView.tune(inputId!!, null)
             } catch (e: Exception) {
                 finish()

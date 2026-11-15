@@ -746,7 +746,7 @@ class MainActivity : Activity() {
         timeColumn.addView(dateText!!)
         rightSection.addView(timeColumn)
 
-        rightSection.addView(View(this).apply { width = u(24f) }, LinearLayout.LayoutParams(WRAP, MATCH))
+        rightSection.addView(View(this), LinearLayout.LayoutParams(u(24f), MATCH))
 
         profileIcon = ProfileIconView(this)
         rightSection.addView(profileIcon, LinearLayout.LayoutParams(u(36f), u(36f)).apply { rightMargin = u(16f) })

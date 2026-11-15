@@ -222,7 +222,7 @@ class SettingsActivity : Activity() {
             isClickable = true
             setOnClickListener { dialog.dismiss() }
         }
-        panel.addView(closeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply { topMargin = 24f })
+        panel.addView(closeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER).apply { topMargin = 24 })
 
         dialog.setContentView(panel)
         dialog.window?.apply {
