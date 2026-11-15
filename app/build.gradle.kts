@@ -3,21 +3,21 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 android {
-    namespace = "com.tvhome"
+    namespace = "com.realm.tvos"
     compileSdk = 34
     defaultConfig {
-        applicationId = "com.tvhome.app"
+        applicationId = "com.realm.tvos.app"
         minSdk = 21
         targetSdk = 34
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 21) + 21
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 21) + 20
         versionName = "21.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
     }
     signingConfigs {
         getByName("debug") {
-            storeFile = file("tvhome.jks")
-            storePassword = "tvhome123"
-            keyAlias = "tvhome"
-            keyPassword = "tvhome123"
+            storeFile = file("realm_tvos.jks")
+            storePassword = "realm123"
+            keyAlias = "realm"
+            keyPassword = "realm123"
         }
     }
     compileOptions {
