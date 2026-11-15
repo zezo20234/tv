@@ -9,7 +9,7 @@
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
     <application
-        android:label="REALM TV OS v22"
+        android:label="TV Home v20"
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
@@ -36,10 +36,9 @@
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|uiMode|density|fontScale" />
         <activity
-            android:name=".SettingsActivity"
+            android:name=".FinderActivity"
             android:exported="false"
             android:screenOrientation="landscape"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
-            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|uiMode|density|fontScale" />
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
     </application>
 </manifest>
