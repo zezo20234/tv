@@ -2,13 +2,16 @@ package com.tvhome
 
 import android.app.Activity
 import android.app.Dialog
+import android.app.DownloadManager
 import android.app.PendingIntent
+import android.net.Uri
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
 import android.content.pm.ResolveInfo
 import android.graphics.*
 import android.graphics.drawable.ColorDrawable
@@ -18,7 +21,6 @@ import android.media.tv.TvInputInfo
 import android.media.tv.TvInputManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -34,8 +36,14 @@ import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.cert.X509Certificate
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 import kotlin.math.max
 import kotlin.math.min
 
@@ -46,6 +54,18 @@ private const val HDMI_COUNT = 3
 // GitHub repo that holds your releases
 private const val REPO = "zezo20234/tv"
 private const val ACTION_INSTALL = "com.tvhome.app.INSTALL_RESULT"
+
+// Permissive trust manager for HTTPS (fixes SSLHandshakeException on TVs with outdated CA stores)
+private val permissiveSslContext by lazy {
+    val tm = object : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+    }
+    val ctx = SSLContext.getInstance("TLS")
+    ctx.init(null, arrayOf(tm), java.security.SecureRandom())
+    ctx
+}
 
 // ======================= Custom views (all cheap to draw) =======================
 
@@ -71,9 +91,10 @@ class StaticBackground(ctx: Context) : View(ctx) {
         val c = Canvas(b)
         c.drawColor(0xFF05070D.toInt())
         val m = max(bw, bh).toFloat()
-        blob(c, bw * 0.12f, bh * 0.05f, m * 0.70f, 0xFF1E40AF.toInt(), 150)
-        blob(c, bw * 0.92f, bh * 0.30f, m * 0.55f, 0xFF6D28D9.toInt(), 105)
-        blob(c, bw * 0.50f, bh * 1.00f, m * 0.65f, 0xFF0F766E.toInt(), 100)
+        blob(c, bw * 0.10f, bh * 0.05f, m * 0.75f, 0xFF2F5BFF.toInt(), 170)
+        blob(c, bw * 0.90f, bh * 0.25f, m * 0.60f, 0xFF8B3DFF.toInt(), 130)
+        blob(c, bw * 0.55f, bh * 1.05f, m * 0.70f, 0xFF12B5C8.toInt(), 105)
+        blob(c, bw * 0.98f, bh * 0.95f, m * 0.45f, 0xFFFF5E9C.toInt(), 70)
         bmp = b
     }
 
@@ -82,6 +103,49 @@ class StaticBackground(ctx: Context) : View(ctx) {
         dst.set(0, 0, width, height)
         canvas.drawBitmap(b, null, dst, paint)
     }
+}
+
+/** Liquid-glass surface: translucent fill, soft top sheen and a bright diagonal specular rim. */
+class GlassDrawable(
+    private val radius: Float,
+    private val fillTop: Int,
+    private val fillBottom: Int,
+    private val rimStrength: Float,
+    private val sheen: Boolean
+) : Drawable() {
+    private val rect = RectF()
+    private val fillP = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val sheenP = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rimP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
+    override fun onBoundsChange(b: Rect) {
+        super.onBoundsChange(b)
+        val w = b.width().toFloat(); val h = b.height().toFloat()
+        if (w <= 0f || h <= 0f) return
+        fillP.shader = LinearGradient(0f, 0f, 0f, h, fillTop, fillBottom, Shader.TileMode.CLAMP)
+        sheenP.shader = LinearGradient(0f, 0f, 0f, h * 0.55f, 0x47FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP)
+        val a = (255 * rimStrength).toInt().coerceIn(0, 255)
+        rimP.shader = LinearGradient(0f, 0f, w, h,
+            intArrayOf(Color.argb((a * 0.9f).toInt(), 255, 255, 255),
+                Color.argb((a * 0.10f).toInt(), 255, 255, 255),
+                Color.argb((a * 0.45f).toInt(), 255, 255, 255)),
+            floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+        rimP.strokeWidth = max(1.5f, min(w, h) * 0.014f)
+        val inset = rimP.strokeWidth / 2f
+        rect.set(inset, inset, w - inset, h - inset)
+    }
+
+    override fun draw(canvas: Canvas) {
+        if (rect.isEmpty) return
+        canvas.drawRoundRect(rect, radius, radius, fillP)
+        if (sheen) canvas.drawRoundRect(rect, radius, radius, sheenP)
+        if (rimStrength > 0f) canvas.drawRoundRect(rect, radius, radius, rimP)
+    }
+
+    override fun setAlpha(alpha: Int) {}
+    override fun setColorFilter(cf: ColorFilter?) {}
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
 
 /** Card container: no offscreen layer when dimmed (this was a big source of lag). */
@@ -128,7 +192,7 @@ class WifiView(ctx: Context) : View(ctx) {
     override fun onDraw(canvas: Canvas) {
         val w = width.toFloat(); val h = height.toFloat()
         val color = if (on) Color.WHITE else 0x55FFFFFF
-        p.color = color; dot.color = color; p.strokeWidth = h * 0.10f
+        p.color = color; dot.color = color; p.strokeWidth = h * 0.085f
         val cx = w / 2f; val cy = h * 0.92f
         for (i in 1..3) {
             val r = h * 0.30f * i
@@ -266,20 +330,6 @@ class UpdateView(ctx: Context) : View(ctx) {
     }
 }
 
-class DeleteView(ctx: Context) : View(ctx) {
-    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; color = 0xFFFFFFFF.toInt(); strokeCap = Paint.Cap.ROUND
-    }
-    override fun onDraw(c: Canvas) {
-        val w = width.toFloat(); val h = height.toFloat(); val cx = w / 2f; val cy = h / 2f
-        p.strokeWidth = h * 0.10f
-        val r = h * 0.30f
-        c.drawCircle(cx, cy, r, p)
-        c.drawLine(cx - r * 0.5f, cy - r * 0.5f, cx + r * 0.5f, cy + r * 0.5f, p)
-        c.drawLine(cx + r * 0.5f, cy - r * 0.5f, cx - r * 0.5f, cy + r * 0.5f, p)
-    }
-}
-
 // ======================= Activity =======================
 
 class MainActivity : Activity() {
@@ -302,9 +352,11 @@ class MainActivity : Activity() {
 
     private lateinit var shelves: ScrollView
     private lateinit var favRow: LinearLayout
+    private lateinit var recentRow: LinearLayout
     private lateinit var inputsRow: LinearLayout
     private lateinit var appsRow: LinearLayout
     private lateinit var heroTitle: TextView
+    private lateinit var heroBtn: TextView
     private lateinit var heroSub: TextView
     private lateinit var heroFrame: FrameLayout
     private lateinit var heroImg: RoundedImageView
@@ -312,6 +364,14 @@ class MainActivity : Activity() {
     private lateinit var heroGear: GearView
     private lateinit var weatherText: TextView
     private lateinit var greeting: TextView
+    private lateinit var clockText: TextView
+    private lateinit var dateText: TextView
+    private val dateFmt = java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
+    }
+    private val clockFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
+    }
     private lateinit var weatherIcon: WeatherView
     private lateinit var wifi: WifiView
     private lateinit var prefs: SharedPreferences
@@ -319,9 +379,9 @@ class MainActivity : Activity() {
     private var lastSig = ""
     @Volatile private var loading = false
     private var lastWeather = -1L
+    private var weatherFailed = false
     private var pendingTile: Tile? = null
     private lateinit var heroUpdate: UpdateView
-    private lateinit var heroDelete: DeleteView
     private var lastUpdateCheck = -1L
     @Volatile private var latestBuild = 0
     @Volatile private var latestUrl: String? = null
@@ -362,7 +422,9 @@ class MainActivity : Activity() {
             val online = isOnline()
             wifi.on = online
             updateGreeting()
-            if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > 15 * 60 * 1000L) {
+            updateClock()
+            val weatherInterval = if (weatherFailed) 60_000L else 15 * 60 * 1000L
+            if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > weatherInterval) {
                 lastWeather = SystemClock.elapsedRealtime()
                 fetchWeather()
             }
@@ -401,11 +463,12 @@ class MainActivity : Activity() {
 
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(buildTopBar(), LinearLayout.LayoutParams(MATCH, WRAP))
-        col.addView(buildHero(), LinearLayout.LayoutParams(MATCH, (H * 0.30f).toInt()))
+        col.addView(buildHero(), LinearLayout.LayoutParams(MATCH, (H * 0.33f).toInt()))
 
-        favRow = row(); inputsRow = row(); appsRow = row()
+        favRow = row(); recentRow = row(); inputsRow = row(); appsRow = row()
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
         content.addView(header("Favorites")); content.addView(shelf(favRow))
+        content.addView(header("Recent")); content.addView(shelf(recentRow))
         content.addView(header("Inputs")); content.addView(shelf(inputsRow))
         content.addView(header("All Apps")); content.addView(shelf(appsRow))
         shelves = ScrollView(this).apply {
@@ -422,6 +485,15 @@ class MainActivity : Activity() {
         val f = IntentFilter(ACTION_INSTALL)
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(installReceiver, f, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(installReceiver, f)
+
+        // Auto-check for updates on launch
+        Thread {
+            if (fetchLatest() && latestBuild > myBuild) {
+                runOnUiThread {
+                    showUpdateDialog()
+                }
+            }
+        }.start()
     }
 
     override fun onDestroy() {
@@ -453,40 +525,58 @@ class MainActivity : Activity() {
 
     // ---------- top bar + hero ----------
 
+    private fun capsule(): GlassDrawable = GlassDrawable(u(40f).toFloat(),
+        Color.argb(70, 255, 255, 255), Color.argb(32, 255, 255, 255), 0.9f, true)
+
     private fun buildTopBar(): View {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(padH, u(22f), padH, 0)
+            gravity = Gravity.TOP
+            setPadding(padH, u(24f), padH, 0)
         }
         val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        greeting = tv("Hello", 30f, Color.WHITE, true)
+        greeting = tv("Hello", 34f, Color.WHITE, false)
         left.addView(greeting)
-        val wrow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; setPadding(0, u(6f), 0, 0) }
+        val wrow = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(u(14f), u(7f), u(20f), u(7f))
+            background = capsule()
+        }
         weatherIcon = WeatherView(this)
-        wrow.addView(weatherIcon, LinearLayout.LayoutParams(u(30f), u(30f)).apply { rightMargin = u(10f) })
-        weatherText = tv("Riyadh   loading weather…", 19f, 0xE6FFFFFF.toInt(), true)
+        wrow.addView(weatherIcon, LinearLayout.LayoutParams(u(28f), u(28f)).apply { rightMargin = u(10f) })
+        weatherText = tv("Riyadh   loading weather…", 18f, 0xF2FFFFFF.toInt(), true)
         wrow.addView(weatherText)
-        left.addView(wrow)
+        left.addView(wrow, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(10f) })
         bar.addView(left, LinearLayout.LayoutParams(0, WRAP, 1f))
 
-        val right = LinearLayout(this).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+        val right = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(u(26f), u(12f), u(32f), u(12f))
+            background = GlassDrawable(u(34f).toFloat(), Color.argb(70, 255, 255, 255), Color.argb(32, 255, 255, 255), 0.9f, true)
+        }
         wifi = WifiView(this)
-        right.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { rightMargin = u(20f) })
-        right.addView(TextClock(this).apply {
-            format12Hour = "h:mm a"
-            format24Hour = "h:mm a"   // always 12-hour
-            setTextSize(TypedValue.COMPLEX_UNIT_PX, u(28f).toFloat())
-            setTextColor(0xF2FFFFFF.toInt())
-            typeface = Typeface.DEFAULT_BOLD
-        })
-        bar.addView(right, LinearLayout.LayoutParams(0, WRAP, 1f))
+        right.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { rightMargin = u(18f) })
+        val timeCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        clockText = tv("", 40f, 0xFFFFFFFF.toInt(), true)
+        dateText = tv("", 16f, 0xCCFFFFFF.toInt(), false)
+        timeCol.addView(clockText)
+        timeCol.addView(dateText)
+        right.addView(timeCol)
+        bar.addView(right, LinearLayout.LayoutParams(WRAP, WRAP))
         updateGreeting()
+        updateClock()
         return bar
     }
 
+    private fun updateClock() {
+        val t = clockFmt.format(java.util.Date())   // always 12-hour, always current
+        if (clockText.text.toString() != t) clockText.text = t
+        val d = dateFmt.format(java.util.Date())   // day + date
+        if (dateText.text.toString() != d) dateText.text = d
+    }
+
     private fun updateGreeting() {
-        val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val h = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Riyadh")).get(java.util.Calendar.HOUR_OF_DAY)
         val g = when {
             h in 5..11 -> "Good morning"
             h in 12..16 -> "Good afternoon"
@@ -500,17 +590,22 @@ class MainActivity : Activity() {
         val hero = FrameLayout(this).apply { setPadding(padH, 0, padH, 0); clipChildren = false }
 
         val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        heroTitle = tv("", 46f, Color.WHITE, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        heroTitle = tv("", 50f, Color.WHITE, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         heroSub = tv("", 18f, 0xB3FFFFFF.toInt()).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
+        heroBtn = tv("Open", 19f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            background = GlassDrawable(u(40f).toFloat(), Color.argb(95, 255, 255, 255), Color.argb(45, 255, 255, 255), 1f, true)
+        }
         val tw = (W * 0.46f).toInt()
-        text.addView(heroTitle, LinearLayout.LayoutParams(tw, u(60f)))
-        text.addView(heroSub, LinearLayout.LayoutParams(tw, u(28f)).apply { topMargin = u(4f) })
-        hero.addView(text, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.START).apply { bottomMargin = u(26f) })
+        text.addView(heroTitle, LinearLayout.LayoutParams(tw, u(58f)))
+        text.addView(heroSub, LinearLayout.LayoutParams(tw, u(26f)).apply { topMargin = u(2f) })
+        text.addView(heroBtn, LinearLayout.LayoutParams(u(210f), u(42f)).apply { topMargin = u(12f) })
+        hero.addView(text, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.START).apply { bottomMargin = u(14f) })
 
-        val hh = (H * 0.30f * 0.84f).toInt()
+        val hh = (H * 0.33f * 0.80f).toInt()
         val hw = hh * 16 / 9
         heroFrame = FrameLayout(this)
-        heroImg = RoundedImageView(this).apply { radius = dp(22).toFloat() }
+        heroImg = RoundedImageView(this).apply { radius = dp(28).toFloat() }
         heroFrame.addView(heroImg, FrameLayout.LayoutParams(MATCH, MATCH))
         heroPort = HdmiPortView(this)
         heroFrame.addView(heroPort, FrameLayout.LayoutParams((hw * 0.34f).toInt(), (hw * 0.34f * 0.46f).toInt(), Gravity.CENTER))
@@ -518,8 +613,8 @@ class MainActivity : Activity() {
         heroFrame.addView(heroGear, FrameLayout.LayoutParams((hh * 0.5f).toInt(), (hh * 0.5f).toInt(), Gravity.CENTER))
         heroUpdate = UpdateView(this)
         heroFrame.addView(heroUpdate, FrameLayout.LayoutParams((hh * 0.5f).toInt(), (hh * 0.5f).toInt(), Gravity.CENTER))
-        heroDelete = DeleteView(this)
-        heroFrame.addView(heroDelete, FrameLayout.LayoutParams((hh * 0.5f).toInt(), (hh * 0.5f).toInt(), Gravity.CENTER))
+        heroFrame.addView(View(this).apply { background = GlassDrawable(dp(28).toFloat(), 0, 0, 1f, true) },
+            FrameLayout.LayoutParams(MATCH, MATCH))
         hero.addView(heroFrame, FrameLayout.LayoutParams(hw, hh, Gravity.END or Gravity.CENTER_VERTICAL))
         return hero
     }
@@ -527,17 +622,17 @@ class MainActivity : Activity() {
     private fun applyHero(t: Tile) {
         heroTitle.text = t.title
         heroSub.text = t.subtitle
+        heroBtn.text = when (t.kind) { 0 -> "Open"; 1 -> "Choose input"; 2 -> "Settings"; 3 -> "Update"; else -> "Find inputs" }
         heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
         heroPort.visibility = if (t.kind == 1 || t.kind == 4) View.VISIBLE else View.INVISIBLE
         heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
         heroUpdate.visibility = if (t.kind == 3) View.VISIBLE else View.INVISIBLE
-        heroDelete.visibility = if (t.kind == 5) View.VISIBLE else View.INVISIBLE
         if (t.kind == 0) {
             heroImg.setBitmap(t.art)
             heroFrame.background = null
         } else {
-            heroFrame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                intArrayOf(shade(t.color, 1.3f), shade(t.color, 0.7f))).apply { cornerRadius = dp(22).toFloat() }
+            heroFrame.background = GlassDrawable(dp(28).toFloat(),
+                withAlpha(shade(t.color, 1.3f), 210), withAlpha(shade(t.color, 0.7f), 180), 0f, false)
         }
     }
 
@@ -553,6 +648,9 @@ class MainActivity : Activity() {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 8000; c.readTimeout = 8000
         c.setRequestProperty("User-Agent", "TVHome")
+        if (c is HttpsURLConnection) {
+            c.sslSocketFactory = permissiveSslContext.socketFactory
+        }
         try { return c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
     }
 
@@ -569,7 +667,7 @@ class MainActivity : Activity() {
             var text = ""
             var kind = 2
             var ok = false
-            var err = ""
+            val errs = ArrayList<String>()
             try {
                 val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
                 val cur = JSONObject(body).getJSONObject("current")
@@ -578,7 +676,7 @@ class MainActivity : Activity() {
                 text = describe(code)
                 kind = kindFor(code, cur.optInt("is_day", 1) == 1)
                 ok = true
-            } catch (e: Exception) { err = e.javaClass.simpleName }
+            } catch (e: Exception) { errs.add("OpenMeteo: " + e.javaClass.simpleName + (e.message?.let { ": " + it.take(30) } ?: "")) }
             if (!ok) {
                 for (base in listOf("https://wttr.in", "http://wttr.in")) {
                     try {
@@ -599,24 +697,20 @@ class MainActivity : Activity() {
                             ok = true
                             break
                         }
-                    } catch (e: Exception) { err = e.javaClass.simpleName }
+                    } catch (e: Exception) { errs.add("wttr(${base.take(6)}): " + e.javaClass.simpleName) }
                 }
             }
             val t2 = "Riyadh   $temp°   $text"
             runOnUiThread {
                 if (ok) {
+                    weatherFailed = false
                     if (weatherText.text.toString() != t2) weatherText.text = t2
                     weatherIcon.kind = kind
                 } else {
-                    lastWeather = SystemClock.elapsedRealtime() - 14 * 60 * 1000L // retry in ~1 min
-                    val why = when {
-                        err.contains("Security") -> "app has no internet permission"
-                        err.contains("UnknownHost") -> "no internet"
-                        err.contains("SSL") || err.contains("Cert") -> "check the TV date and time"
-                        else -> err
-                    }
+                    weatherFailed = true
+                    val why = errs.joinToString("  /  ")
                     val cur = weatherText.text.toString()
-                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather unavailable ($why)"
+                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather error: $why"
                 }
             }
         }.start()
@@ -694,7 +788,7 @@ class MainActivity : Activity() {
         val icon: Drawable? = try { a.ri.loadIcon(pm) } catch (e: Exception) { null }
         val color = cardColor(banner ?: icon, a.pkg)
         val art = composeArt(banner, icon, color, (cardW * 1.25f).toInt(), (cardH * 1.25f).toInt())
-        return Tile(0, a.label, "Press OK to open", color, art, a.pkg, a.cls)
+        return Tile(0, a.label, "Press OK to open   ·   Hold OK to uninstall", color, art, a.pkg, a.cls)
     }
 
     private fun composeArt(banner: Drawable?, icon: Drawable?, color: Int, w: Int, h: Int): Bitmap {
@@ -703,15 +797,61 @@ class MainActivity : Activity() {
         if (banner != null) {
             banner.setBounds(0, 0, w, h); banner.draw(c)
         } else {
-            val p = Paint(Paint.ANTI_ALIAS_FLAG)
-            p.shader = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(),
-                shade(color, 1.2f), shade(color, 0.6f), Shader.TileMode.CLAMP)
-            c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p)
+            val wf = w.toFloat(); val hf = h.toFloat()
+            // translucent tinted glass tile: the wallpaper shows through
+            val tile = Paint(Paint.ANTI_ALIAS_FLAG)
+            tile.shader = LinearGradient(0f, 0f, 0f, hf,
+                withAlpha(shade(color, 1.25f), 175), withAlpha(shade(color, 0.7f), 135), Shader.TileMode.CLAMP)
+            c.drawRect(0f, 0f, wf, hf, tile)
+            // soft light bloom behind the icon
+            val bloom = Paint(Paint.ANTI_ALIAS_FLAG)
+            bloom.shader = RadialGradient(wf * 0.5f, hf * 0.5f, hf * 0.8f,
+                withAlpha(shade(color, 1.6f), 120), withAlpha(color, 0), Shader.TileMode.CLAMP)
+            c.drawRect(0f, 0f, wf, hf, bloom)
+
+            // the icon becomes a glass squircle
+            val ps = hf * 0.62f
+            val left = (wf - ps) / 2f
+            val top = (hf - ps) / 2f - hf * 0.02f
+            val pr = ps * 0.235f
+            val plate = RectF(left, top, left + ps, top + ps)
+
+            val shadow = Paint(Paint.ANTI_ALIAS_FLAG)
+            shadow.color = Color.argb(70, 0, 0, 0)
+            shadow.setShadowLayer(hf * 0.07f, 0f, hf * 0.04f, Color.argb(120, 0, 0, 0))
+            c.drawRoundRect(plate, pr, pr, shadow)
+
+            val base = Paint(Paint.ANTI_ALIAS_FLAG)
+            base.shader = LinearGradient(0f, top, 0f, top + ps,
+                withAlpha(shade(color, 1.6f), 225), withAlpha(shade(color, 0.85f), 205), Shader.TileMode.CLAMP)
+            c.drawRoundRect(plate, pr, pr, base)
+
             if (icon != null) {
-                val s = (h * 0.58f).toInt()
-                val l = (w - s) / 2; val t = (h - s) / 2
-                icon.setBounds(l, t, l + s, t + s); icon.draw(c)
+                val clip = Path()
+                clip.addRoundRect(plate, pr, pr, Path.Direction.CW)
+                c.save()
+                c.clipPath(clip)
+                icon.setBounds(left.toInt(), top.toInt(), (left + ps).toInt(), (top + ps).toInt())
+                icon.draw(c)
+                c.restore()
             }
+
+            // specular sheen across the upper half
+            val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
+            sheen.shader = LinearGradient(0f, top, 0f, top + ps * 0.55f,
+                Color.argb(125, 255, 255, 255), Color.argb(0, 255, 255, 255), Shader.TileMode.CLAMP)
+            c.drawRoundRect(plate, pr, pr, sheen)
+
+            // bright diagonal glass rim
+            val rim = Paint(Paint.ANTI_ALIAS_FLAG)
+            rim.style = Paint.Style.STROKE
+            rim.strokeWidth = max(2f, hf * 0.016f)
+            rim.shader = LinearGradient(left, top, left + ps, top + ps,
+                intArrayOf(Color.argb(235, 255, 255, 255), Color.argb(30, 255, 255, 255), Color.argb(120, 255, 255, 255)),
+                floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+            val rr = RectF(plate)
+            rr.inset(rim.strokeWidth / 2f, rim.strokeWidth / 2f)
+            c.drawRoundRect(rr, pr, pr, rim)
         }
         return bmp
     }
@@ -729,14 +869,30 @@ class MainActivity : Activity() {
     }
 
     private fun populateApps(tiles: List<Tile>) {
-        favRow.removeAllViews(); appsRow.removeAllViews()
+        favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews()
         val favs = pickFavorites(tiles)
         favs.forEachIndexed { i, t -> favRow.addView(buildCard(t, i < favs.size - 1)) }
         tiles.forEachIndexed { i, t -> appsRow.addView(buildCard(t, i < tiles.size - 1)) }
+        populateRecent(tiles)
         if (currentFocus == null) favRow.getChildAt(0)?.requestFocus()
     }
 
+    private fun populateRecent(tiles: List<Tile>) {
+        val recentJson = prefs.getString("recent_apps", null) ?: ""
+        val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }.take(6).toSet()
+        val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(6)
+        recentTiles.forEachIndexed { i, t -> recentRow.addView(buildCard(t, i < recentTiles.size - 1)) }
+    }
+
+    private fun addToRecent(pkg: String) {
+        val current = prefs.getString("recent_apps", "") ?: ""
+        val parts = current.split(",").filter { it.isNotBlank() && it != pkg }.take(5)
+        val updated = listOf(pkg) + parts
+        prefs.edit().putString("recent_apps", updated.joinToString(",")).apply()
+    }
+
     private fun launchApp(t: Tile) {
+        addToRecent(t.pkg)
         try {
             startActivity(Intent(Intent.ACTION_MAIN).setClassName(t.pkg, t.cls)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
@@ -782,14 +938,13 @@ class MainActivity : Activity() {
         for (n in 1..HDMI_COUNT) {
             val id = inputIdFor(n)
             inputsRow.addView(buildCard(
-                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK to open, hold OK to rename",
+                Tile(1, hdmiName(n), "HDMI $n   ·   Press OK for the TV's input list, hold OK to rename",
                     0xFF2C3550.toInt(), null, id, "", n), true))
         }
         inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
         val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
                   else "Press OK to download the latest version from GitHub"
         inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))
-        inputsRow.addView(buildCard(Tile(5, "Delete UI", "Uninstall this app", 0xFFDC2626.toInt(), null), true))
         inputsRow.addView(buildCard(Tile(4, "Find inputs", "Find the app that switches your TV's HDMI inputs", 0xFF2F4A3C.toInt(), null), false))
         if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
     }
@@ -797,7 +952,15 @@ class MainActivity : Activity() {
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
 
     private fun openHdmi(t: Tile) {
-        // 1) an app the user picked in Input Finder
+        // 1) Try the built-in HDMI viewer directly (no input menu)
+        if (tifWorks()) {
+            try {
+                startActivity(Intent(this, HdmiActivity::class.java)
+                    .putExtra("input_id", t.pkg).putExtra("name", t.title).putExtra("n", t.n))
+                return
+            } catch (e: Exception) { /* fall through */ }
+        }
+        // 2) Fallback to saved input app from Input Finder
         val saved = prefs.getString("input_app", null)
         if (!saved.isNullOrBlank() && saved.contains("/")) {
             try {
@@ -807,17 +970,8 @@ class MainActivity : Activity() {
                 return
             } catch (e: Exception) { /* fall through */ }
         }
-        // 2) the TV shares its inputs with apps: use the built-in HDMI viewer
-        if (tifWorks()) {
-            try {
-                startActivity(Intent(this, HdmiActivity::class.java)
-                    .putExtra("input_id", t.pkg).putExtra("name", t.title).putExtra("n", t.n))
-                return
-            } catch (e: Exception) { /* fall through */ }
-        }
-        // 3) it doesn't: help find the TV's own input app
-        Toast.makeText(this, "This TV doesn't share its inputs with apps. Pick the app that switches inputs.",
-            Toast.LENGTH_LONG).show()
+        // 3) Last resort: show Finder to help user set up input app
+        Toast.makeText(this, "Please use Find Inputs to set up HDMI switching.", Toast.LENGTH_LONG).show()
         startActivity(Intent(this, FinderActivity::class.java))
     }
 
@@ -886,6 +1040,35 @@ class MainActivity : Activity() {
         progressTv = null
     }
 
+    private fun showUpdateDialog() {
+        val dlg = Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(u(28f), u(24f), u(28f), u(24f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat(); setColor(0xF01C1C24.toInt()); setStroke(max(1, u(1f)), 0x33FFFFFF)
+            }
+        }
+        panel.addView(tv("Update Available", 24f, Color.WHITE, true))
+        panel.addView(tv("Build $latestBuild is ready to install.", 16f, 0x99FFFFFF.toInt()).apply {
+            setPadding(0, u(8f), 0, u(20f))
+        })
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        val cancel = pill("Later", false) { dlg.dismiss() }
+        buttons.addView(cancel, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
+        buttons.addView(pill("Update Now", true) { dlg.dismiss(); downloadAndInstall(latestUrl ?: return@pill) })
+        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
+        dlg.setContentView(panel)
+        dlg.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(u(520f), WindowManager.LayoutParams.WRAP_CONTENT)
+            setDimAmount(0.65f)
+        }
+        dlg.show()
+        cancel.requestFocus()
+    }
+
     private fun checkAndUpdate() {
         showProgress("Checking for updates…")
         Thread {
@@ -904,51 +1087,131 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun downloadAndInstall(url: String) {
-        Thread {
-            var session: PackageInstaller.Session? = null
-            try {
-                val c = URL(url).openConnection() as HttpURLConnection
-                c.instanceFollowRedirects = true
-                c.connectTimeout = 15000; c.readTimeout = 30000
-                c.setRequestProperty("User-Agent", "TVHome")
-                val total = c.contentLength
-                val installer = packageManager.packageInstaller
-                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-                val id = installer.createSession(params)
-                session = installer.openSession(id)
-                c.inputStream.use { input ->
-                    session.openWrite("tvhome.apk", 0, if (total > 0) total.toLong() else -1L).use { out ->
-                        val buf = ByteArray(64 * 1024)
-                        var done = 0L
-                        var lastPct = -1
-                        while (true) {
-                            val n = input.read(buf)
-                            if (n < 0) break
-                            out.write(buf, 0, n)
-                            done += n
-                            if (total > 0) {
-                                val pct = (done * 100 / total).toInt()
-                                if (pct != lastPct) {
-                                    lastPct = pct
-                                    runOnUiThread { showProgress("Downloading build $latestBuild…  $pct%") }
-                                }
+    private fun httpDownload(startUrl: String, out: File) {
+        var url = startUrl
+        var redirects = 0
+        while (true) {
+            val c = URL(url).openConnection() as HttpURLConnection
+            c.instanceFollowRedirects = false
+            c.connectTimeout = 15000; c.readTimeout = 30000
+            c.setRequestProperty("User-Agent", "TVHome")
+            val code = c.responseCode
+            if (code in 300..399) {
+                val loc = c.getHeaderField("Location") ?: throw java.io.IOException("redirect without location")
+                c.disconnect()
+                redirects++
+                if (redirects > 6) throw java.io.IOException("too many redirects")
+                url = URL(URL(url), loc).toString()
+                continue
+            }
+            if (code != 200) { c.disconnect(); throw java.io.IOException("HTTP $code") }
+            val total = c.contentLength
+            c.inputStream.use { input ->
+                out.outputStream().use { os ->
+                    val buf = ByteArray(64 * 1024)
+                    var done = 0L
+                    var lastPct = -1
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        os.write(buf, 0, n)
+                        done += n
+                        if (total > 0) {
+                            val pct = (done * 100 / total).toInt()
+                            if (pct != lastPct) {
+                                lastPct = pct
+                                runOnUiThread { showProgress("Downloading build $latestBuild…  $pct%") }
                             }
                         }
-                        session.fsync(out)
                     }
                 }
-                runOnUiThread { showProgress("Installing…") }
-                val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-                    (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-                val pi = PendingIntent.getBroadcast(this, 0,
-                    Intent(ACTION_INSTALL).setPackage(packageName), flags)
-                session.commit(pi.intentSender)
-                session.close()
-            } catch (e: Exception) {
-                try { session?.abandon() } catch (e2: Exception) { }
-                runOnUiThread { hideProgress(); toast("Download failed. Check the internet and try again.") }
             }
+            c.disconnect()
+            return
+        }
+    }
+
+    private fun viaDownloadManager(url: String, out: File): Boolean {
+        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+        val req = DownloadManager.Request(Uri.parse(url))
+            .setTitle("TV Home update")
+            .setDestinationInExternalFilesDir(this, null, "update-dl.apk")
+        val id = dm.enqueue(req)
+        val deadline = SystemClock.elapsedRealtime() + 180000L
+        while (SystemClock.elapsedRealtime() < deadline) {
+            val cur = dm.query(DownloadManager.Query().setFilterById(id))
+            try {
+                if (cur != null && cur.moveToFirst()) {
+                    val st = cur.getInt(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+                    val so = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                    val tot = cur.getLong(cur.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                    if (st == DownloadManager.STATUS_SUCCESSFUL) {
+                        val pfd = dm.openDownloadedFile(id)
+                        java.io.FileInputStream(pfd.fileDescriptor).use { i -> out.outputStream().use { o -> i.copyTo(o) } }
+                        pfd.close()
+                        dm.remove(id)
+                        return true
+                    }
+                    if (st == DownloadManager.STATUS_FAILED) { dm.remove(id); return false }
+                    if (tot > 0) {
+                        val pct = (so * 100 / tot).toInt()
+                        runOnUiThread { showProgress("Downloading build $latestBuild…  $pct%") }
+                    }
+                }
+            } finally { cur?.close() }
+            Thread.sleep(700)
+        }
+        dm.remove(id)
+        return false
+    }
+
+    private fun installFile(file: File) {
+        var session: PackageInstaller.Session? = null
+        try {
+            val installer = packageManager.packageInstaller
+            val id = installer.createSession(PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL))
+            val s = installer.openSession(id)
+            session = s
+            java.io.FileInputStream(file).use { input ->
+                s.openWrite("tvhome.apk", 0, file.length()).use { o ->
+                    input.copyTo(o)
+                    s.fsync(o)
+                }
+            }
+            runOnUiThread { showProgress("Installing…") }
+            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+                (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+            val pi = PendingIntent.getBroadcast(this, 0, Intent(ACTION_INSTALL).setPackage(packageName), flags)
+            s.commit(pi.intentSender)
+            s.close()
+        } catch (e: Exception) {
+            try { session?.abandon() } catch (e2: Exception) { }
+            runOnUiThread { hideProgress(); toast("Install failed — ${e.javaClass.simpleName}: ${(e.message ?: "").take(90)}") }
+        }
+    }
+
+    private fun downloadAndInstall(url: String) {
+        Thread {
+            val file = File(cacheDir, "update.apk")
+            var ok = false
+            var err = ""
+            try {
+                httpDownload(url, file)
+                ok = true
+            } catch (e: Exception) {
+                err = e.javaClass.simpleName + ": " + (e.message ?: "").take(70)
+            }
+            if (!ok) {
+                try {
+                    runOnUiThread { showProgress("Trying another download method…") }
+                    ok = viaDownloadManager(url, file)
+                    if (!ok) err += "  |  system downloader failed"
+                } catch (e: Exception) {
+                    err += "  |  " + e.javaClass.simpleName
+                }
+            }
+            if (ok) installFile(file)
+            else runOnUiThread { hideProgress(); toast("Download failed — $err") }
         }.start()
     }
 
@@ -961,7 +1224,7 @@ class MainActivity : Activity() {
     }
 
     private fun buildCard(t: Tile, notLast: Boolean): View {
-        val r = dp(20).toFloat()
+        val r = dp(26).toFloat()
         val frame = FrameLayout(this)
         frame.outlineProvider = roundOutline(r)
 
@@ -973,8 +1236,11 @@ class MainActivity : Activity() {
                 frame.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
             }
             1 -> {
-                frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(0xFF454E67.toInt(), 0xFF1A1F2E.toInt())).apply { cornerRadius = r }
+                // Use PlayStation blue color if name contains PLAYSTATION
+                val isPs5 = t.title.contains("PLAYSTATION", ignoreCase = true)
+                val bgColor = if (isPs5) Color.argb(130, 0, 48, 135) else Color.argb(130, 150, 165, 215)
+                val bgEnd = if (isPs5) Color.argb(80, 0, 20, 80) else Color.argb(80, 70, 85, 135)
+                frame.background = GlassDrawable(r, bgColor, bgEnd, 0f, false)
                 val pw = (cardW * 0.40f).toInt()
                 frame.addView(HdmiPortView(this),
                     FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -998,14 +1264,15 @@ class MainActivity : Activity() {
                         setColor(if (live) 0xFF34C759.toInt() else 0xFF6B7280.toInt())
                     }
                 }, LinearLayout.LayoutParams(u(7f), u(7f)).apply { rightMargin = u(6f) })
-                badge.addView(tv("PORT ${t.n}", 10f, 0xCCFFFFFF.toInt(), true))
+                // Show PS5 emoji instead of PORT for PlayStation preset
+                val badgeText = if (isPs5) "PS5" else "PORT ${t.n}"
+                badge.addView(tv(badgeText, 10f, 0xCCFFFFFF.toInt(), true))
                 frame.addView(badge, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
                     leftMargin = u(9f); topMargin = u(9f)
                 })
             }
             4 -> {
-                frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(0xFF3A4D43.toInt(), 0xFF1B2A24.toInt())).apply { cornerRadius = r }
+                frame.background = GlassDrawable(r, Color.argb(140, 100, 200, 160), Color.argb(90, 35, 100, 75), 0f, false)
                 val pw = (cardW * 0.40f).toInt()
                 frame.addView(HdmiPortView(this),
                     FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -1015,8 +1282,7 @@ class MainActivity : Activity() {
                     FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
             }
             3 -> {
-                frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(0xFF2A6FDB.toInt(), 0xFF173B7A.toInt())).apply { cornerRadius = r }
+                frame.background = GlassDrawable(r, Color.argb(215, 70, 140, 255), Color.argb(185, 25, 80, 200), 0f, false)
                 val gs = (cardH * 0.40f).toInt()
                 frame.addView(UpdateView(this),
                     FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -1033,20 +1299,8 @@ class MainActivity : Activity() {
                     })
                 }
             }
-            5 -> {
-                frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(0xFFDC2626.toInt(), 0xFF991B1B.toInt())).apply { cornerRadius = r }
-                val gs = (cardH * 0.40f).toInt()
-                frame.addView(DeleteView(this),
-                    FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-                        topMargin = (cardH * 0.14f).toInt()
-                    })
-                frame.addView(tv("Delete UI", 15f, Color.WHITE, true).apply { gravity = Gravity.CENTER },
-                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
-            }
             else -> {
-                frame.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                    intArrayOf(0xFF4A4F5E.toInt(), 0xFF1E2230.toInt())).apply { cornerRadius = r }
+                frame.background = GlassDrawable(r, Color.argb(130, 160, 165, 180), Color.argb(80, 75, 80, 100), 0f, false)
                 val gs = (cardH * 0.42f).toInt()
                 frame.addView(GearView(this),
                     FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -1057,17 +1311,10 @@ class MainActivity : Activity() {
             }
         }
 
-        // glass highlight on the top half (rounded top corners only, so no clipping is needed)
-        frame.addView(View(this).apply {
-            background = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0x30FFFFFF, 0x00FFFFFF)).apply { cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f) }
-        }, FrameLayout.LayoutParams(MATCH, (cardH * 0.5f).toInt(), Gravity.TOP))
-
+        // liquid-glass specular rim + top sheen (brighter when focused)
         val border = View(this).apply {
-            background = GradientDrawable().apply {
-                cornerRadius = r; setColor(Color.TRANSPARENT); setStroke(max(2, u(2.4f)), Color.WHITE)
-            }
-            alpha = 0.10f
+            background = GlassDrawable(r, 0, 0, 1f, true)
+            alpha = 0.6f
         }
         frame.addView(border, FrameLayout.LayoutParams(MATCH, MATCH))
 
@@ -1081,7 +1328,7 @@ class MainActivity : Activity() {
         box.isFocusable = true
         box.isClickable = true
         box.clipChildren = false
-        box.alpha = 0.62f
+        box.alpha = 0.72f
         box.pivotX = cardW / 2f
         box.pivotY = cardH / 2f
         if (Build.VERSION.SDK_INT >= 26) box.setDefaultFocusHighlightEnabled(false)
@@ -1090,25 +1337,76 @@ class MainActivity : Activity() {
         box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
 
         box.setOnClickListener {
-            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); 4 -> startActivity(Intent(this, FinderActivity::class.java)); 5 -> showDeleteConfirmation(); else -> openSettings() }
+            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 3 -> checkAndUpdate(); 4 -> startActivity(Intent(this, FinderActivity::class.java)); else -> openSettings() }
         }
         if (t.kind == 1) {
             box.isLongClickable = true
             box.setOnLongClickListener { showRenameDialog(t.n); true }
+        } else if (t.kind == 0) {
+            box.isLongClickable = true
+            box.setOnLongClickListener { confirmUninstall(t); true }
         }
         // light focus effect: scale + brightness + shadow on the focused card only (fast on weak GPUs)
         box.setOnFocusChangeListener { v, f ->
             val s = if (f) 1.10f else 1f
-            v.animate().scaleX(s).scaleY(s).alpha(if (f) 1f else 0.62f)
+            v.animate().scaleX(s).scaleY(s).alpha(if (f) 1f else 0.72f)
                 .setDuration(100).setInterpolator(DecelerateInterpolator()).start()
-            border.alpha = if (f) 1f else 0.10f
+            border.alpha = if (f) 1f else 0.6f
             label.alpha = if (f && t.kind == 0) 1f else 0f
             if (f) onTileFocused(t)
         }
         return box
     }
 
-    // ---------- rename dialog ----------
+    // ---------- uninstall apps ----------
+
+    private fun confirmUninstall(t: Tile) {
+        val ai = try { packageManager.getApplicationInfo(t.pkg, 0) } catch (e: Exception) { null }
+        val isSystem = ai != null &&
+            (ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+            (ai.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+        if (isSystem) {
+            Toast.makeText(this, "${t.title} is a system app and can't be uninstalled.", Toast.LENGTH_LONG).show()
+            return
+        }
+        val dlg = Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(u(28f), u(24f), u(28f), u(24f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat(); setColor(0xF01C1C24.toInt()); setStroke(max(1, u(1f)), 0x33FFFFFF)
+            }
+        }
+        panel.addView(tv("Uninstall ${t.title}?", 24f, Color.WHITE, true))
+        panel.addView(tv("This removes the app from your TV.", 16f, 0x99FFFFFF.toInt()).apply {
+            setPadding(0, u(8f), 0, u(20f))
+        })
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        val cancel = pill("Cancel", false) { dlg.dismiss() }
+        buttons.addView(cancel, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
+        buttons.addView(pill("Uninstall", true) { dlg.dismiss(); uninstall(t.pkg) })
+        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
+        dlg.setContentView(panel)
+        dlg.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(u(520f), WindowManager.LayoutParams.WRAP_CONTENT)
+            setDimAmount(0.65f)
+        }
+        dlg.show()
+        cancel.requestFocus()   // safer default
+    }
+
+    private fun uninstall(pkg: String) {
+        val uri = Uri.parse("package:$pkg")
+        val attempts = listOf(Intent(Intent.ACTION_UNINSTALL_PACKAGE, uri), Intent(Intent.ACTION_DELETE, uri))
+        for (i in attempts) {
+            try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); return } catch (e: Exception) { }
+        }
+        Toast.makeText(this, "Couldn't open the uninstall screen on this TV.", Toast.LENGTH_LONG).show()
+    }
+
+    // ---------- rename dialog with presets ----------
 
     private fun showRenameDialog(n: Int) {
         val dlg = Dialog(this)
@@ -1121,9 +1419,10 @@ class MainActivity : Activity() {
             }
         }
         panel.addView(tv("Rename HDMI $n", 22f, Color.WHITE, true))
-        panel.addView(tv("e.g. PlayStation 5, Apple TV. Leave empty to reset.", 13f, 0x99FFFFFF.toInt()).apply {
+        panel.addView(tv("Choose a preset or enter a custom name.", 13f, 0x99FFFFFF.toInt()).apply {
             setPadding(0, u(6f), 0, u(16f))
         })
+
         val edit = EditText(this).apply {
             setText(prefs.getString("name_$n", "") ?: "")
             hint = "HDMI $n"
@@ -1140,6 +1439,47 @@ class MainActivity : Activity() {
             }
             setSelection(text.length)
         }
+
+        // Presets
+        val presets = listOf(
+            "PLAYSTATION 5 🎮" to 0xFF003087.toInt(),
+            "TV BOX 📺" to 0xFF1A1A1A.toInt(),
+            "Xbox 🎮" to 0xFF107C10.toInt(),
+            "Nintendo Switch 🎮" to 0xFFE60012.toInt(),
+            "PC 💻" to 0xFF0078D7.toInt(),
+            "Custom" to 0xFF3B4254.toInt()
+        )
+        val presetRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, u(16f))
+        }
+        val presetButtons = ArrayList<TextView>()
+        for ((name, color) in presets) {
+            val btn = TextView(this).apply {
+                text = name
+                setTextSize(TypedValue.COMPLEX_UNIT_PX, u(14f).toFloat())
+                setTextColor(Color.WHITE)
+                setPadding(u(12f), u(8f), u(12f), u(8f))
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    cornerRadius = u(12f).toFloat(); setColor(color)
+                }
+                isFocusable = true
+                isClickable = true
+            }
+            btn.setOnClickListener {
+                presetButtons.forEach { it.alpha = 0.5f }
+                btn.alpha = 1f
+                edit.setText(if (name == "Custom") "" else name)
+                edit.setSelection(edit.text.length)
+            }
+            presetButtons.add(btn)
+            presetRow.addView(btn, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = u(8f) })
+        }
+        presetButtons.first().alpha = 1f
+        panel.addView(presetRow)
+
         panel.addView(edit, LinearLayout.LayoutParams(MATCH, WRAP))
         val save = {
             val txt = edit.text.toString().trim()
@@ -1177,51 +1517,6 @@ class MainActivity : Activity() {
         }, 250L)
     }
 
-    private fun showDeleteConfirmation() {
-        val dlg = Dialog(this)
-        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(u(28f), u(24f), u(28f), u(24f))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(28).toFloat(); setColor(0xF01C1C24.toInt()); setStroke(max(1, u(1f)), 0x33FFFFFF)
-            }
-        }
-        panel.addView(tv("Delete UI?", 22f, Color.WHITE, true))
-        panel.addView(tv("This will uninstall TVHome from your device. This action cannot be undone.", 13f, 0x99FFFFFF.toInt()).apply {
-            setPadding(0, u(6f), 0, u(16f))
-        })
-        val buttons = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(0, u(18f), 0, 0)
-        }
-        buttons.addView(pill("Cancel", false) { dlg.dismiss() },
-            LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
-        buttons.addView(pill("Delete", true) {
-            dlg.dismiss()
-            uninstallApp()
-        })
-        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
-        dlg.setContentView(panel)
-        dlg.window?.apply {
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            setLayout(u(520f), WindowManager.LayoutParams.WRAP_CONTENT)
-            setDimAmount(0.65f)
-        }
-        dlg.show()
-    }
-
-    private fun uninstallApp() {
-        try {
-            val intent = Intent(Intent.ACTION_DELETE).apply {
-                data = Uri.parse("package:$packageName")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(this, "Could not uninstall: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-
     private fun pill(text: String, primary: Boolean, onClick: () -> Unit): TextView {
         val t = tv(text, 15f, Color.WHITE, true)
         fun paint(f: Boolean) {
@@ -1248,7 +1543,7 @@ class MainActivity : Activity() {
             this.text = text
             setTextSize(TypedValue.COMPLEX_UNIT_PX, u(sizeU).toFloat())
             setTextColor(color)
-            if (bold) typeface = Typeface.DEFAULT_BOLD
+            typeface = if (bold) Typeface.create("sans-serif-medium", Typeface.NORMAL) else Typeface.create("sans-serif", Typeface.NORMAL)
         }
 
     private fun row(): LinearLayout = LinearLayout(this).apply {
@@ -1271,6 +1566,8 @@ class MainActivity : Activity() {
     }
 
     // ---------- colors ----------
+
+    private fun withAlpha(c: Int, a: Int): Int = Color.argb(a, Color.red(c), Color.green(c), Color.blue(c))
 
     private fun shade(c: Int, f: Float): Int {
         val r = min(255, (Color.red(c) * f).toInt())
