@@ -355,6 +355,7 @@ class MainActivity : Activity() {
     private var lastSig = ""
     @Volatile private var loading = false
     private var lastWeather = -1L
+    private var weatherFailed = false
     private var pendingTile: Tile? = null
     private lateinit var heroUpdate: UpdateView
     private var lastUpdateCheck = -1L
@@ -398,7 +399,8 @@ class MainActivity : Activity() {
             wifi.on = online
             updateGreeting()
             updateClock()
-            if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > 15 * 60 * 1000L) {
+            val weatherInterval = if (weatherFailed) 60_000L else 15 * 60 * 1000L
+            if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > weatherInterval) {
                 lastWeather = SystemClock.elapsedRealtime()
                 fetchWeather()
             }
@@ -658,10 +660,11 @@ class MainActivity : Activity() {
             val t2 = "Riyadh   $temp°   $text"
             runOnUiThread {
                 if (ok) {
+                    weatherFailed = false
                     if (weatherText.text.toString() != t2) weatherText.text = t2
                     weatherIcon.kind = kind
                 } else {
-                    lastWeather = SystemClock.elapsedRealtime() - 14 * 60 * 1000L // retry in ~1 min
+                    weatherFailed = true
                     val why = errs.joinToString("  /  ")
                     val cur = weatherText.text.toString()
                     if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather unavailable ($why)"
