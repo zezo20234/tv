@@ -454,22 +454,36 @@ class MainActivity : Activity() {
 
     private val ticker = object : Runnable {
         override fun run() {
-            val online = isOnline()
-            wifi.on = online
-            updateGreeting()
-            updateClock()
-            val weatherInterval = if (weatherFailed) 60_000L else 15 * 60 * 1000L
-            if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > weatherInterval) {
-                lastWeather = SystemClock.elapsedRealtime()
-                fetchWeather()
-            }
-            if (lastUpdateCheck < 0 || SystemClock.elapsedRealtime() - lastUpdateCheck > 6 * 60 * 60 * 1000L) {
-                lastUpdateCheck = SystemClock.elapsedRealtime()
-                Thread {
-                    if (fetchLatest() && latestBuild > myBuild) {
-                        runOnUiThread { if (currentFocus?.parent !== inputsRow) refreshInputs(0) }
-                    }
-                }.start()
+            try {
+                val online = isOnline()
+                wifi.on = online
+                updateGreeting()
+                updateClock()
+                val weatherInterval = if (weatherFailed) 60_000L else 15 * 60 * 1000L
+                if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > weatherInterval) {
+                    lastWeather = SystemClock.elapsedRealtime()
+                    fetchWeather()
+                }
+                if (lastUpdateCheck < 0 || SystemClock.elapsedRealtime() - lastUpdateCheck > 6 * 60 * 60 * 1000L) {
+                    lastUpdateCheck = SystemClock.elapsedRealtime()
+                    Thread {
+                        try {
+                            if (fetchLatest() && latestBuild > myBuild) {
+                                runOnUiThread {
+                                    try {
+                                        if (currentFocus?.parent !== inputsRow) refreshInputs(0)
+                                    } catch (e: Exception) {
+                                        // Ignore UI errors
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // Ignore update check errors
+                        }
+                    }.start()
+                }
+            } catch (e: Exception) {
+                // Don't crash on ticker errors
             }
             handler.postDelayed(this, 5000L)
         }
@@ -523,10 +537,18 @@ class MainActivity : Activity() {
 
         // Auto-check for updates on launch
         Thread {
-            if (fetchLatest() && latestBuild > myBuild) {
-                runOnUiThread {
-                    showUpdateDialog()
+            try {
+                if (fetchLatest() && latestBuild > myBuild) {
+                    runOnUiThread {
+                        try {
+                            showUpdateDialog()
+                        } catch (e: Exception) {
+                            // Ignore dialog errors
+                        }
+                    }
                 }
+            } catch (e: Exception) {
+                // Ignore update check errors - don't crash the app
             }
         }.start()
     }
@@ -538,9 +560,13 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        refreshApps(false)
-        refreshInputs(0)
-        handler.post(ticker)
+        try {
+            refreshApps(false)
+            refreshInputs(0)
+            handler.post(ticker)
+        } catch (e: Exception) {
+            // Don't crash on resume errors
+        }
     }
 
     override fun onPause() {
@@ -655,26 +681,34 @@ class MainActivity : Activity() {
     }
 
     private fun applyHero(t: Tile) {
-        heroTitle.text = t.title
-        heroSub.text = t.subtitle
-        heroBtn.text = when (t.kind) { 0 -> "Open"; 1 -> "Choose input"; 2 -> "Settings"; 3 -> "Update"; else -> "Find inputs" }
-        heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
-        heroPort.visibility = if (t.kind == 1 || t.kind == 4) View.VISIBLE else View.INVISIBLE
-        heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
-        heroUpdate.visibility = if (t.kind == 3) View.VISIBLE else View.INVISIBLE
-        if (t.kind == 0) {
-            heroImg.setBitmap(t.art)
-            heroFrame.background = null
-        } else {
-            heroFrame.background = GlassDrawable(dp(28).toFloat(),
-                withAlpha(shade(t.color, 1.3f), 210), withAlpha(shade(t.color, 0.7f), 180), 0f, false)
+        try {
+            heroTitle.text = t.title
+            heroSub.text = t.subtitle
+            heroBtn.text = when (t.kind) { 0 -> "Open"; 1 -> "Choose input"; 2 -> "Settings"; 3 -> "Update"; else -> "Find inputs" }
+            heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
+            heroPort.visibility = if (t.kind == 1 || t.kind == 4) View.VISIBLE else View.INVISIBLE
+            heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
+            heroUpdate.visibility = if (t.kind == 3) View.VISIBLE else View.INVISIBLE
+            if (t.kind == 0) {
+                heroImg.setBitmap(t.art)
+                heroFrame.background = null
+            } else {
+                heroFrame.background = GlassDrawable(dp(28).toFloat(),
+                    withAlpha(shade(t.color, 1.3f), 210), withAlpha(shade(t.color, 0.7f), 180), 0f, false)
+            }
+        } catch (e: Exception) {
+            // Ignore hero update errors
         }
     }
 
     private fun onTileFocused(t: Tile) {
-        pendingTile = t
-        handler.removeCallbacks(heroRunnable)
-        handler.postDelayed(heroRunnable, 45L)
+        try {
+            pendingTile = t
+            handler.removeCallbacks(heroRunnable)
+            handler.postDelayed(heroRunnable, 45L)
+        } catch (e: Exception) {
+            // Ignore focus errors
+        }
     }
 
     // ---------- weather (Open-Meteo, no key) ----------
@@ -698,55 +732,64 @@ class MainActivity : Activity() {
 
     private fun fetchWeather() {
         Thread {
-            var temp = 0
-            var text = ""
-            var kind = 2
-            var ok = false
-            val errs = ArrayList<String>()
             try {
-                val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
-                val cur = JSONObject(body).getJSONObject("current")
-                temp = Math.round(cur.getDouble("temperature_2m")).toInt()
-                val code = cur.getInt("weather_code")
-                text = describe(code)
-                kind = kindFor(code, cur.optInt("is_day", 1) == 1)
-                ok = true
-            } catch (e: Exception) { errs.add("OpenMeteo: " + e.javaClass.simpleName + (e.message?.let { ": " + it.take(30) } ?: "")) }
-            if (!ok) {
-                for (base in listOf("https://wttr.in", "http://wttr.in")) {
-                    try {
-                        val parts = httpGet("$base/Riyadh?format=%t|%C").trim().split("|")
-                        val num = Regex("-?[0-9]+").find(parts[0])?.value?.toIntOrNull()
-                        if (num != null) {
-                            temp = num
-                            text = if (parts.size > 1) parts[1].trim() else ""
-                            val low = text.lowercase()
-                            val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-                            val day = hr in 6..17
-                            kind = when {
-                                low.contains("thunder") -> 4
-                                low.contains("rain") || low.contains("drizzle") || low.contains("shower") -> 3
-                                low.contains("sun") || low.contains("clear") -> if (day) 0 else 1
-                                else -> 2
+                var temp = 0
+                var text = ""
+                var kind = 2
+                var ok = false
+                val errs = ArrayList<String>()
+                try {
+                    val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
+                    val cur = JSONObject(body).getJSONObject("current")
+                    temp = Math.round(cur.getDouble("temperature_2m")).toInt()
+                    val code = cur.getInt("weather_code")
+                    text = describe(code)
+                    kind = kindFor(code, cur.optInt("is_day", 1) == 1)
+                    ok = true
+                } catch (e: Exception) { errs.add("OpenMeteo: " + e.javaClass.simpleName + (e.message?.let { ": " + it.take(30) } ?: "")) }
+                if (!ok) {
+                    for (base in listOf("https://wttr.in", "http://wttr.in")) {
+                        try {
+                            val parts = httpGet("$base/Riyadh?format=%t|%C").trim().split("|")
+                            val num = Regex("-?[0-9]+").find(parts[0])?.value?.toIntOrNull()
+                            if (num != null) {
+                                temp = num
+                                text = if (parts.size > 1) parts[1].trim() else ""
+                                val low = text.lowercase()
+                                val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                                val day = hr in 6..17
+                                kind = when {
+                                    low.contains("thunder") -> 4
+                                    low.contains("rain") || low.contains("drizzle") || low.contains("shower") -> 3
+                                    low.contains("sun") || low.contains("clear") -> if (day) 0 else 1
+                                    else -> 2
+                                }
+                                ok = true
+                                break
                             }
-                            ok = true
-                            break
+                        } catch (e: Exception) { errs.add("wttr(${base.take(6)}): " + e.javaClass.simpleName) }
+                    }
+                }
+                val t2 = "Riyadh   $temp°   $text"
+                runOnUiThread {
+                    try {
+                        if (ok) {
+                            weatherFailed = false
+                            if (weatherText.text.toString() != t2) weatherText.text = t2
+                            weatherIcon.kind = kind
+                        } else {
+                            weatherFailed = true
+                            val why = errs.joinToString("  /  ")
+                            val cur = weatherText.text.toString()
+                            if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather error: $why"
                         }
-                    } catch (e: Exception) { errs.add("wttr(${base.take(6)}): " + e.javaClass.simpleName) }
+                    } catch (e: Exception) {
+                        // Ignore UI errors
+                    }
                 }
-            }
-            val t2 = "Riyadh   $temp°   $text"
-            runOnUiThread {
-                if (ok) {
-                    weatherFailed = false
-                    if (weatherText.text.toString() != t2) weatherText.text = t2
-                    weatherIcon.kind = kind
-                } else {
-                    weatherFailed = true
-                    val why = errs.joinToString("  /  ")
-                    val cur = weatherText.text.toString()
-                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather error: $why"
-                }
+            } catch (e: Exception) {
+                // Don't crash on weather errors
+                weatherFailed = true
             }
         }.start()
     }
@@ -810,7 +853,14 @@ class MainActivity : Activity() {
                 val sig = apps.joinToString("|") { it.pkg + "/" + it.cls }
                 if (force || sig != lastSig) {
                     val tiles = apps.map { buildAppTile(it) }
-                    runOnUiThread { lastSig = sig; populateApps(tiles) }
+                    runOnUiThread {
+                        try {
+                            lastSig = sig
+                            populateApps(tiles)
+                        } catch (e: Exception) {
+                            // Ignore UI errors
+                        }
+                    }
                 }
             } catch (e: Exception) { /* ignore */ }
             loading = false
@@ -904,19 +954,27 @@ class MainActivity : Activity() {
     }
 
     private fun populateApps(tiles: List<Tile>) {
-        favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews()
-        val favs = pickFavorites(tiles)
-        favs.forEachIndexed { i, t -> favRow.addView(buildCard(t, i < favs.size - 1)) }
-        tiles.forEachIndexed { i, t -> appsRow.addView(buildCard(t, i < tiles.size - 1)) }
-        populateRecent(tiles)
-        if (currentFocus == null) favRow.getChildAt(0)?.requestFocus()
+        try {
+            favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews()
+            val favs = pickFavorites(tiles)
+            favs.forEachIndexed { i, t -> favRow.addView(buildCard(t, i < favs.size - 1)) }
+            tiles.forEachIndexed { i, t -> appsRow.addView(buildCard(t, i < tiles.size - 1)) }
+            populateRecent(tiles)
+            if (currentFocus == null) favRow.getChildAt(0)?.requestFocus()
+        } catch (e: Exception) {
+            // Ignore errors in populating apps
+        }
     }
 
     private fun populateRecent(tiles: List<Tile>) {
-        val recentJson = prefs.getString("recent_apps", null) ?: ""
-        val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }.take(6).toSet()
-        val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(6)
-        recentTiles.forEachIndexed { i, t -> recentRow.addView(buildCard(t, i < recentTiles.size - 1)) }
+        try {
+            val recentJson = prefs.getString("recent_apps", null) ?: ""
+            val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }.take(6).toSet()
+            val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(6)
+            recentTiles.forEachIndexed { i, t -> recentRow.addView(buildCard(t, i < recentTiles.size - 1)) }
+        } catch (e: Exception) {
+            // Ignore errors in populating recent
+        }
     }
 
     private fun addToRecent(pkg: String) {
@@ -973,18 +1031,26 @@ class MainActivity : Activity() {
     }
 
     private fun refreshInputs(focusN: Int) {
-        inputsRow.removeAllViews()
-        for (n in 1..HDMI_COUNT) {
-            val id = inputIdFor(n)
-            inputsRow.addView(buildCard(
-                Tile(1, hdmiName(n), "HDMI $n   ·   Hold OK to rename",
-                    0xFF2C3550.toInt(), null, id, "", n), true))
+        try {
+            inputsRow.removeAllViews()
+            for (n in 1..HDMI_COUNT) {
+                val id = inputIdFor(n)
+                inputsRow.addView(buildCard(
+                    Tile(1, hdmiName(n), "HDMI $n   ·   Hold OK to rename",
+                        0xFF2C3550.toInt(), null, id, "", n), true))
+            }
+            inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
+            val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
+                      else "Press OK to download the latest version from GitHub"
+            inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))
+            try {
+                if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
+            } catch (e: Exception) {
+                // Ignore focus errors
+            }
+        } catch (e: Exception) {
+            // Ignore errors in refreshing inputs
         }
-        inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", 0xFF3B4254.toInt(), null), true))
-        val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
-                  else "Press OK to download the latest version from GitHub"
-        inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))
-        if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
     }
 
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
@@ -1257,11 +1323,12 @@ class MainActivity : Activity() {
     }
 
     private fun buildCard(t: Tile, notLast: Boolean): View {
-        val r = dp(26).toFloat()
-        val frame = FrameLayout(this)
-        frame.outlineProvider = roundOutline(r)
+        try {
+            val r = dp(26).toFloat()
+            val frame = FrameLayout(this)
+            frame.outlineProvider = roundOutline(r)
 
-        when (t.kind) {
+            when (t.kind) {
             0 -> {
                 val iv = RoundedImageView(this)
                 iv.radius = r
@@ -1311,16 +1378,6 @@ class MainActivity : Activity() {
                 frame.addView(badge, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.START).apply {
                     leftMargin = u(9f); topMargin = u(9f)
                 })
-            }
-            4 -> {
-                frame.background = GlassDrawable(r, Color.argb(140, 100, 200, 160), Color.argb(90, 35, 100, 75), 0f, false)
-                val pw = (cardW * 0.40f).toInt()
-                frame.addView(HdmiPortView(this),
-                    FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-                        topMargin = (cardH * 0.26f).toInt()
-                    })
-                frame.addView(tv("Find inputs", 15f, Color.WHITE, true).apply { gravity = Gravity.CENTER },
-                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
             }
             3 -> {
                 frame.background = GlassDrawable(r, Color.argb(215, 70, 140, 255), Color.argb(185, 25, 80, 200), 0f, false)
@@ -1378,7 +1435,11 @@ class MainActivity : Activity() {
         box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
 
         box.setOnClickListener {
-            when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 2 -> openSettings(); 3 -> checkAndUpdate(); else -> { } }
+            try {
+                when (t.kind) { 0 -> launchApp(t); 1 -> openHdmi(t); 2 -> openSettings(); 3 -> checkAndUpdate(); else -> { } }
+            } catch (e: Exception) {
+                // Ignore click errors
+            }
         }
         if (t.kind == 1) {
             box.isLongClickable = true
@@ -1389,14 +1450,24 @@ class MainActivity : Activity() {
         }
         // light focus effect: scale + brightness + shadow on the focused card only (fast on weak GPUs)
         box.setOnFocusChangeListener { v, f ->
-            val s = if (f) 1.10f else 1f
-            v.animate().scaleX(s).scaleY(s).alpha(if (f) 1f else 0.72f)
-                .setDuration(100).setInterpolator(DecelerateInterpolator()).start()
-            border.alpha = if (f) 1f else 0.6f
-            label.alpha = if (f && t.kind == 0) 1f else 0f
-            if (f) onTileFocused(t)
+            try {
+                val s = if (f) 1.10f else 1f
+                v.animate().scaleX(s).scaleY(s).alpha(if (f) 1f else 0.72f)
+                    .setDuration(100).setInterpolator(DecelerateInterpolator()).start()
+                border.alpha = if (f) 1f else 0.6f
+                label.alpha = if (f && t.kind == 0) 1f else 0f
+                if (f) onTileFocused(t)
+            } catch (e: Exception) {
+                // Ignore focus errors
+            }
         }
         return box
+        } catch (e: Exception) {
+            // Return a simple placeholder view if buildCard fails
+            val placeholder = FrameLayout(this)
+            placeholder.layoutParams = LinearLayout.LayoutParams(cardW, cardH)
+            return placeholder
+        }
     }
 
     // ---------- uninstall apps ----------
