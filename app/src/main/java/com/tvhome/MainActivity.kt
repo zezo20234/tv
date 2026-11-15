@@ -1002,6 +1002,10 @@ class MainActivity : Activity() {
             c.connectTimeout = 10000; c.readTimeout = 10000
             c.setRequestProperty("User-Agent", "TVHome")
             c.setRequestProperty("Accept", "application/vnd.github+json")
+            if (c is HttpsURLConnection) {
+                c.sslSocketFactory = permissiveSslContext.socketFactory
+                c.hostnameVerifier = { _, _ -> true }
+            }
             val body = c.inputStream.bufferedReader().use { it.readText() }
             c.disconnect()
             val j = JSONObject(body)
@@ -1095,6 +1099,10 @@ class MainActivity : Activity() {
             c.instanceFollowRedirects = false
             c.connectTimeout = 15000; c.readTimeout = 30000
             c.setRequestProperty("User-Agent", "TVHome")
+            if (c is HttpsURLConnection) {
+                c.sslSocketFactory = permissiveSslContext.socketFactory
+                c.hostnameVerifier = { _, _ -> true }
+            }
             val code = c.responseCode
             if (code in 300..399) {
                 val loc = c.getHeaderField("Location") ?: throw java.io.IOException("redirect without location")
