@@ -365,6 +365,10 @@ class MainActivity : Activity() {
     private lateinit var weatherText: TextView
     private lateinit var greeting: TextView
     private lateinit var clockText: TextView
+    private lateinit var dateText: TextView
+    private val dateFmt = java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
+    }
     private val clockFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply {
         timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
     }
@@ -547,13 +551,17 @@ class MainActivity : Activity() {
 
         val right = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(u(22f), u(9f), u(26f), u(9f))
-            background = capsule()
+            setPadding(u(26f), u(12f), u(32f), u(12f))
+            background = GlassDrawable(u(34f).toFloat(), Color.argb(70, 255, 255, 255), Color.argb(32, 255, 255, 255), 0.9f, true)
         }
         wifi = WifiView(this)
-        right.addView(wifi, LinearLayout.LayoutParams(u(26f), u(21f)).apply { rightMargin = u(16f) })
-        clockText = tv("", 26f, 0xF2FFFFFF.toInt(), true)
-        right.addView(clockText)
+        right.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { rightMargin = u(18f) })
+        val timeCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        clockText = tv("", 40f, 0xFFFFFFFF.toInt(), true)
+        dateText = tv("", 16f, 0xCCFFFFFF.toInt(), false)
+        timeCol.addView(clockText)
+        timeCol.addView(dateText)
+        right.addView(timeCol)
         bar.addView(right, LinearLayout.LayoutParams(WRAP, WRAP))
         updateGreeting()
         updateClock()
@@ -563,10 +571,12 @@ class MainActivity : Activity() {
     private fun updateClock() {
         val t = clockFmt.format(java.util.Date())   // always 12-hour, always current
         if (clockText.text.toString() != t) clockText.text = t
+        val d = dateFmt.format(java.util.Date())   // day + date
+        if (dateText.text.toString() != d) dateText.text = d
     }
 
     private fun updateGreeting() {
-        val h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        val h = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Riyadh")).get(java.util.Calendar.HOUR_OF_DAY)
         val g = when {
             h in 5..11 -> "Good morning"
             h in 12..16 -> "Good afternoon"
@@ -787,19 +797,61 @@ class MainActivity : Activity() {
         if (banner != null) {
             banner.setBounds(0, 0, w, h); banner.draw(c)
         } else {
-            val p = Paint(Paint.ANTI_ALIAS_FLAG)
-            p.shader = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(),
-                shade(color, 1.2f), shade(color, 0.6f), Shader.TileMode.CLAMP)
-            c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), p)
-            val hp = Paint(Paint.ANTI_ALIAS_FLAG)
-            hp.shader = RadialGradient(w * 0.28f, h * 0.05f, w * 0.8f,
-                Color.argb(80, 255, 255, 255), Color.argb(0, 255, 255, 255), Shader.TileMode.CLAMP)
-            c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), hp)
+            val wf = w.toFloat(); val hf = h.toFloat()
+            // translucent tinted glass tile: the wallpaper shows through
+            val tile = Paint(Paint.ANTI_ALIAS_FLAG)
+            tile.shader = LinearGradient(0f, 0f, 0f, hf,
+                withAlpha(shade(color, 1.25f), 175), withAlpha(shade(color, 0.7f), 135), Shader.TileMode.CLAMP)
+            c.drawRect(0f, 0f, wf, hf, tile)
+            // soft light bloom behind the icon
+            val bloom = Paint(Paint.ANTI_ALIAS_FLAG)
+            bloom.shader = RadialGradient(wf * 0.5f, hf * 0.5f, hf * 0.8f,
+                withAlpha(shade(color, 1.6f), 120), withAlpha(color, 0), Shader.TileMode.CLAMP)
+            c.drawRect(0f, 0f, wf, hf, bloom)
+
+            // the icon becomes a glass squircle
+            val ps = hf * 0.62f
+            val left = (wf - ps) / 2f
+            val top = (hf - ps) / 2f - hf * 0.02f
+            val pr = ps * 0.235f
+            val plate = RectF(left, top, left + ps, top + ps)
+
+            val shadow = Paint(Paint.ANTI_ALIAS_FLAG)
+            shadow.color = Color.argb(70, 0, 0, 0)
+            shadow.setShadowLayer(hf * 0.07f, 0f, hf * 0.04f, Color.argb(120, 0, 0, 0))
+            c.drawRoundRect(plate, pr, pr, shadow)
+
+            val base = Paint(Paint.ANTI_ALIAS_FLAG)
+            base.shader = LinearGradient(0f, top, 0f, top + ps,
+                withAlpha(shade(color, 1.6f), 225), withAlpha(shade(color, 0.85f), 205), Shader.TileMode.CLAMP)
+            c.drawRoundRect(plate, pr, pr, base)
+
             if (icon != null) {
-                val s = (h * 0.58f).toInt()
-                val l = (w - s) / 2; val t = (h - s) / 2
-                icon.setBounds(l, t, l + s, t + s); icon.draw(c)
+                val clip = Path()
+                clip.addRoundRect(plate, pr, pr, Path.Direction.CW)
+                c.save()
+                c.clipPath(clip)
+                icon.setBounds(left.toInt(), top.toInt(), (left + ps).toInt(), (top + ps).toInt())
+                icon.draw(c)
+                c.restore()
             }
+
+            // specular sheen across the upper half
+            val sheen = Paint(Paint.ANTI_ALIAS_FLAG)
+            sheen.shader = LinearGradient(0f, top, 0f, top + ps * 0.55f,
+                Color.argb(125, 255, 255, 255), Color.argb(0, 255, 255, 255), Shader.TileMode.CLAMP)
+            c.drawRoundRect(plate, pr, pr, sheen)
+
+            // bright diagonal glass rim
+            val rim = Paint(Paint.ANTI_ALIAS_FLAG)
+            rim.style = Paint.Style.STROKE
+            rim.strokeWidth = max(2f, hf * 0.016f)
+            rim.shader = LinearGradient(left, top, left + ps, top + ps,
+                intArrayOf(Color.argb(235, 255, 255, 255), Color.argb(30, 255, 255, 255), Color.argb(120, 255, 255, 255)),
+                floatArrayOf(0f, 0.55f, 1f), Shader.TileMode.CLAMP)
+            val rr = RectF(plate)
+            rr.inset(rim.strokeWidth / 2f, rim.strokeWidth / 2f)
+            c.drawRoundRect(rr, pr, pr, rim)
         }
         return bmp
     }
@@ -950,9 +1002,6 @@ class MainActivity : Activity() {
             c.connectTimeout = 10000; c.readTimeout = 10000
             c.setRequestProperty("User-Agent", "TVHome")
             c.setRequestProperty("Accept", "application/vnd.github+json")
-            if (c is HttpsURLConnection) {
-                c.sslSocketFactory = permissiveSslContext.socketFactory
-            }
             val body = c.inputStream.bufferedReader().use { it.readText() }
             c.disconnect()
             val j = JSONObject(body)
@@ -1046,9 +1095,6 @@ class MainActivity : Activity() {
             c.instanceFollowRedirects = false
             c.connectTimeout = 15000; c.readTimeout = 30000
             c.setRequestProperty("User-Agent", "TVHome")
-            if (c is HttpsURLConnection) {
-                c.sslSocketFactory = permissiveSslContext.socketFactory
-            }
             val code = c.responseCode
             if (code in 300..399) {
                 val loc = c.getHeaderField("Location") ?: throw java.io.IOException("redirect without location")
