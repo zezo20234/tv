@@ -72,13 +72,13 @@ private val permissiveHostnameVerifier = javax.net.ssl.HostnameVerifier { hostna
 
 // ======================= Custom views (all cheap to draw) =======================
 
-enum class ColorMode(val name: String, val colors: List<Int>) {
-    BLUE("Blue Gradient", listOf(0xFF2F5BFF, 0xFF8B3DFF, 0xFF12B5C8, 0xFFFF5E9C)),
-    PURPLE("Purple Haze", listOf(0xFF8B3DFF, 0xFFE056FD, 0xFFBE2EDD, 0xFF7B1FA2)),
-    GREEN("Forest Night", listOf(0xFF2E7D32, 0xFF4CAF50, 0xFF81C784, 0xFF1B5E20)),
-    RED("Sunset Red", listOf(0xFFE53935, 0xFFFF5252, 0xFFFF8A80, 0xFFB71C1C)),
-    ORANGE("Copper", listOf(0xFFE65100, 0xFFFF9800, 0xFFFFB74D, 0xFFBF360C)),
-    CYAN("Ocean Cyan", listOf(0xFF00838F, 0xFF00BCD4, 0xFF4DD0E1, 0xFF006064))
+enum class ColorMode(val displayName: String, val colors: List<Int>) {
+    BLUE("Blue Gradient", listOf(0xFF2F5BFF.toInt(), 0xFF8B3DFF.toInt(), 0xFF12B5C8.toInt(), 0xFFFF5E9C.toInt())),
+    PURPLE("Purple Haze", listOf(0xFF8B3DFF.toInt(), 0xFFE056FD.toInt(), 0xFFBE2EDD.toInt(), 0xFF7B1FA2.toInt())),
+    GREEN("Forest Night", listOf(0xFF2E7D32.toInt(), 0xFF4CAF50.toInt(), 0xFF81C784.toInt(), 0xFF1B5E20.toInt())),
+    RED("Sunset Red", listOf(0xFFE53935.toInt(), 0xFFFF5252.toInt(), 0xFFFF8A80.toInt(), 0xFFB71C1C.toInt())),
+    ORANGE("Copper", listOf(0xFFE65100.toInt(), 0xFFFF9800.toInt(), 0xFFFFB74D.toInt(), 0xFFBF360C.toInt())),
+    CYAN("Ocean Cyan", listOf(0xFF00838F.toInt(), 0xFF00BCD4.toInt(), 0xFF4DD0E1.toInt(), 0xFF006064.toInt()))
 }
 
 /** Dark cinematic mesh gradient, pre-rendered once into a small bitmap (one cheap blit per frame). */
@@ -553,7 +553,7 @@ class MainActivity : Activity() {
 
         // Load saved color mode
         val savedMode = prefs.getString("color_mode", null)
-        currentColorMode = ColorMode.values().find { it.name == savedMode } ?: ColorMode.BLUE
+        currentColorMode = ColorMode.values().find { it.displayName == savedMode } ?: ColorMode.BLUE
 
         gap = u(16f)
         padH = u(46f)
@@ -1616,7 +1616,7 @@ class MainActivity : Activity() {
         val modeButtons = ArrayList<TextView>()
         for (mode in ColorMode.values()) {
             val btn = TextView(this).apply {
-                text = mode.name
+                text = mode.displayName
                 setTextSize(TypedValue.COMPLEX_UNIT_PX, u(13f).toFloat())
                 setTextColor(Color.WHITE)
                 setPadding(u(14f), u(10f), u(14f), u(10f))
@@ -1633,7 +1633,7 @@ class MainActivity : Activity() {
                 btn.alpha = 1f
                 currentColorMode = mode
                 staticBg.setColorMode(mode)
-                prefs.edit().putString("color_mode", mode.name).apply()
+                prefs.edit().putString("color_mode", mode.displayName).apply()
             }
             if (mode == currentColorMode) btn.alpha = 1f else btn.alpha = 0.5f
             modeButtons.add(btn)
@@ -1653,7 +1653,7 @@ class MainActivity : Activity() {
             setDimAmount(0.65f)
         }
         dlg.show()
-        modeButtons.find { it.text == currentColorMode.name }?.requestFocus()
+        modeButtons.find { it.text == currentColorMode.displayName }?.requestFocus()
     }
 
     private fun showRenameDialog(n: Int) {
