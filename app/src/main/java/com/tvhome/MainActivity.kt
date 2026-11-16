@@ -514,6 +514,8 @@ class MainActivity : Activity() {
     private lateinit var dateText: TextView
     private lateinit var weatherText: TextView
     private lateinit var temperatureText: TextView
+    private lateinit var highTempText: TextView
+    private lateinit var lowTempText: TextView
     private lateinit var weatherIcon: WeatherView
     private lateinit var wifi: WifiView
     private lateinit var prefs: SharedPreferences
@@ -540,6 +542,9 @@ class MainActivity : Activity() {
     private lateinit var prayerText: TextView
     private lateinit var prayerNextText: TextView
     private var prayerDay = ""
+    private var lastAlertedPrayer = ""
+    private var prayerAlertView: FrameLayout? = null
+    private var prayerAlertText: TextView? = null
 
     // Prayer times data
     private data class PrayerTime(
@@ -671,6 +676,22 @@ class MainActivity : Activity() {
         col.addView(shelves, LinearLayout.LayoutParams(MATCH, 0, 1f))
 
         root.addView(col, MATCH, MATCH)
+
+        // Prayer alert overlay (hidden by default)
+        prayerAlertText = tv("", 48f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(u(40f), u(40f), u(40f), u(40f))
+        }
+        prayerAlertView = FrameLayout(this).apply {
+            background = Color.argb(230, 220, 38, 38)
+            visibility = View.GONE
+            addView(prayerAlertText, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER))
+            setOnClickListener {
+                visibility = View.GONE
+            }
+        }
+        root.addView(prayerAlertView, FrameLayout.LayoutParams(MATCH, MATCH))
+
         setContentView(root)
 
         val f = IntentFilter(ACTION_INSTALL)
@@ -723,63 +744,64 @@ class MainActivity : Activity() {
             setPadding(padH, u(40f), padH, 0)
         }
 
-        // Center: Large clock and date (iPhone lock screen style)
+        // Left side: Prayer times (next 2 prayers)
+        val leftSide = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setPadding(u(20f), u(16f), u(20f), u(16f))
+            background = GlassDrawable(u(24f).toFloat(),
+                withAlpha(PremiumColors.ACCENT_EMERALD, 25), withAlpha(PremiumColors.ACCENT_EMERALD, 12), 0.5f, true)
+        }
+        prayerText = tv("Loading prayer times\u2026", 18f, PremiumColors.TEXT_PRIMARY, true)
+        leftSide.addView(prayerText)
+        prayerNextText = tv("", 16f, PremiumColors.ACCENT_EMERALD, true)
+        leftSide.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
+        bar.addView(leftSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.START or Gravity.TOP))
+
+        // Center: Large clock and date (iPhone liquid glass style)
         val centerCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
         }
-        clockText = tv("", 140f, Color.argb(230, 255, 255, 255), true).apply {
+        clockText = tv("", 150f, Color.argb(150, 255, 255, 255), true).apply {
             gravity = Gravity.CENTER
-            letterSpacing = 0.02f
+            letterSpacing = -0.03f
             typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
-            setShadowLayer(u(4f).toFloat(), 0f, u(2f).toFloat(), Color.argb(100, 0, 0, 0))
+            setShadowLayer(u(10f).toFloat(), 0f, u(6f).toFloat(), Color.argb(60, 0, 0, 0))
         }
-        dateText = tv("", 22f, Color.argb(200, 255, 255, 255), false).apply {
+        dateText = tv("", 24f, Color.argb(160, 255, 255, 255), false).apply {
             gravity = Gravity.CENTER
-            letterSpacing = 0.08f
+            letterSpacing = 0.1f
             typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
         }
         centerCol.addView(clockText)
         centerCol.addView(dateText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
-
-        // Prayer times pill (always visible like clock)
-        val prayerPill = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(u(20f), u(10f), u(20f), u(10f))
-            background = GlassDrawable(u(20f).toFloat(),
-                withAlpha(PremiumColors.ACCENT_EMERALD, 30), withAlpha(PremiumColors.ACCENT_EMERALD, 15), 0.5f, true)
-        }
-        prayerText = tv("Loading prayer times\u2026", 16f, PremiumColors.TEXT_PRIMARY, true)
-        prayerPill.addView(prayerText)
-        prayerNextText = tv("", 14f, PremiumColors.ACCENT_EMERALD, true)
-        prayerPill.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
-        centerCol.addView(prayerPill, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(12f) })
-
         bar.addView(centerCol, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER or Gravity.TOP))
 
-        // Right side: Temperature + weather + wifi
+        // Right side: Weather with low/current/high temps
         val rightSide = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.END
             setPadding(u(16f), u(12f), u(20f), u(12f))
             background = capsule()
         }
-        val topRow = LinearLayout(this).apply {
+        val tempRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        lowTempText = tv("--°", 16f, PremiumColors.TEXT_SECONDARY, true)
+        tempRow.addView(lowTempText)
         weatherIcon = WeatherView(this)
-        topRow.addView(weatherIcon, LinearLayout.LayoutParams(u(28f), u(28f)).apply { rightMargin = u(10f) })
-        weatherText = tv("Loading weather…", 18f, PremiumColors.TEXT_SECONDARY, true)
-        topRow.addView(weatherText)
-        wifi = WifiView(this)
-        topRow.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { leftMargin = u(16f) })
-        rightSide.addView(topRow)
-        temperatureText = tv("", 16f, PremiumColors.TEXT_PRIMARY, true).apply {
-            gravity = Gravity.END
+        tempRow.addView(weatherIcon, LinearLayout.LayoutParams(u(28f), u(28f)).apply { leftMargin = u(12f); rightMargin = u(12f) })
+        highTempText = tv("--°", 16f, PremiumColors.TEXT_SECONDARY, true)
+        tempRow.addView(highTempText)
+        rightSide.addView(tempRow)
+        weatherText = tv("Loading weather…", 18f, PremiumColors.TEXT_PRIMARY, true).apply {
+            gravity = Gravity.CENTER
         }
-        rightSide.addView(temperatureText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
+        rightSide.addView(weatherText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
+        wifi = WifiView(this)
+        rightSide.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { topMargin = u(8f); gravity = Gravity.END })
         bar.addView(rightSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.TOP))
 
         updateClock()
@@ -946,14 +968,30 @@ class MainActivity : Activity() {
         val two = nextTwoPrayers()
         if (two != null) {
             val a = two[0]
+            val b = two[1]
             prayerText.text = a.name + "  " + fmt12(a.hour, a.minute)
             val s1 = secondsUntil(a)
-            prayerNextText.text = "in " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s1 / 3600, (s1 % 3600) / 60, s1 % 60)
+            prayerNextText.text = b.name + "  " + fmt12(b.hour, b.minute)
             prayerNextText.setTextColor(if (s1 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
+
+            // Check if it's prayer time (within 1 minute)
+            if (s1 <= 60 && lastAlertedPrayer != a.name) {
+                lastAlertedPrayer = a.name
+                showPrayerAlert(a.name)
+            }
         } else {
             prayerText.text = "Loading prayer times\u2026"
             prayerNextText.text = ""
         }
+    }
+
+    private fun showPrayerAlert(prayerName: String) {
+        prayerAlertText?.text = "Time for $prayerName"
+        prayerAlertView?.visibility = View.VISIBLE
+        // Auto-hide after 5 seconds
+        handler.postDelayed({
+            prayerAlertView?.visibility = View.GONE
+        }, 5000)
     }
 
     // ---------- weather ----------
@@ -968,14 +1006,19 @@ class MainActivity : Activity() {
     private fun fetchWeather() {
         Thread {
             var temp = 0
+            var high = 0
+            var low = 0
             var text = ""
             var kind = 2
             var ok = false
             val errs = ArrayList<String>()
             try {
-                val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
+                val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&daily=temperature_2m_max,temperature_2m_min&timezone=auto")
                 val cur = JSONObject(body).getJSONObject("current")
+                val daily = JSONObject(body).getJSONObject("daily")
                 temp = Math.round(cur.getDouble("temperature_2m")).toInt()
+                high = Math.round(daily.getJSONArray("temperature_2m_max").getDouble(0)).toInt()
+                low = Math.round(daily.getJSONArray("temperature_2m_min").getDouble(0)).toInt()
                 val code = cur.getInt("weather_code")
                 text = describe(code)
                 kind = kindFor(code, cur.optInt("is_day", 1) == 1)
@@ -984,18 +1027,20 @@ class MainActivity : Activity() {
             if (!ok) {
                 for (base in listOf("https://wttr.in", "http://wttr.in")) {
                     try {
-                        val parts = httpGet("$base/Riyadh?format=%t|%C").trim().split("|")
+                        val parts = httpGet("$base/Riyadh?format=%t|%C|%l|%h").trim().split("|")
                         val num = Regex("-?[0-9]+").find(parts[0])?.value?.toIntOrNull()
                         if (num != null) {
                             temp = num
                             text = if (parts.size > 1) parts[1].trim() else ""
-                            val low = text.lowercase()
+                            low = if (parts.size > 2) Regex("-?[0-9]+").find(parts[2])?.value?.toIntOrNull() ?: temp else temp
+                            high = if (parts.size > 3) Regex("-?[0-9]+").find(parts[3])?.value?.toIntOrNull() ?: temp else temp
+                            val lowTxt = text.lowercase()
                             val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
                             val day = hr in 6..17
                             kind = when {
-                                low.contains("thunder") -> 4
-                                low.contains("rain") || low.contains("drizzle") || low.contains("shower") -> 3
-                                low.contains("sun") || low.contains("clear") -> if (day) 0 else 1
+                                lowTxt.contains("thunder") -> 4
+                                lowTxt.contains("rain") || lowTxt.contains("drizzle") || lowTxt.contains("shower") -> 3
+                                lowTxt.contains("sun") || lowTxt.contains("clear") -> if (day) 0 else 1
                                 else -> 2
                             }
                             ok = true
@@ -1004,12 +1049,13 @@ class MainActivity : Activity() {
                     } catch (e: Exception) { errs.add("wttr(${base.take(6)}): " + e.javaClass.simpleName) }
                 }
             }
-            val t2 = "$temp°  $text"
+            val t2 = "$text"
             runOnUiThread {
                 if (ok) {
                     weatherFailed = false
                     if (weatherText.text.toString() != t2) weatherText.text = t2
-                    if (temperatureText.text.toString() != "$temp°") temperatureText.text = "$temp°"
+                    lowTempText.text = "${low}°"
+                    highTempText.text = "${high}°"
                     weatherIcon.kind = kind
                 } else {
                     weatherFailed = true
