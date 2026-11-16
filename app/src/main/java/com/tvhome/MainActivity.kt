@@ -111,54 +111,28 @@ enum class ColorMode(val displayName: String, val colors: List<Int>) {
     CHARCOAL("Pure Dark", listOf(0xFF374151.toInt(), 0xFF1F2937.toInt(), 0xFF4B5563.toInt(), 0xFF111827.toInt()))
 }
 
-/** Premium dark background with subtle accent gradients, pre-rendered once into a small bitmap. */
+/** Background with custom image */
 class StaticBackground(ctx: Context) : View(ctx) {
     private var bmp: Bitmap? = null
     private val dst = Rect()
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private var colorMode: ColorMode = ColorMode.EMERALD
-
-    fun setColorMode(mode: ColorMode) {
-        if (colorMode != mode) {
-            colorMode = mode
-            bmp = null
-            requestLayout()
-        }
-    }
-
-    private fun blob(c: Canvas, cx: Float, cy: Float, r: Float, color: Int, alpha: Int) {
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
-        p.shader = RadialGradient(cx, cy, r, intArrayOf(
-            Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color)),
-            Color.argb(0, Color.red(color), Color.green(color), Color.blue(color))
-        ), null, Shader.TileMode.CLAMP)
-        c.drawCircle(cx, cy, r, p)
-    }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
-        val bw = max(8, w / 3); val bh = max(8, h / 3)
-        val b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888)
-        val c = Canvas(b)
-        // Deep charcoal background
-        c.drawColor(PremiumColors.BACKGROUND_DEEP)
-
-        // Subtle gradient overlay
-        val gradient = Paint(Paint.ANTI_ALIAS_FLAG)
-        gradient.shader = LinearGradient(0f, 0f, 0f, bh.toFloat(),
-            intArrayOf(PremiumColors.BACKGROUND_CHARCOAL, PremiumColors.BACKGROUND_DEEP),
-            floatArrayOf(0f, 1f), Shader.TileMode.CLAMP)
-        c.drawRect(0f, 0f, bw.toFloat(), bh.toFloat(), gradient)
-
-        // Very subtle accent blobs for premium feel
-        val m = max(bw, bh).toFloat()
-        val colors = colorMode.colors
-        // Much more subtle than before - premium design shouldn't be flashy
-        blob(c, bw * 0.15f, bh * 0.10f, m * 0.45f, colors[0], 35)
-        blob(c, bw * 0.85f, bh * 0.20f, m * 0.35f, colors[1], 25)
-        blob(c, bw * 0.50f, bh * 0.90f, m * 0.40f, colors[2], 20)
-        blob(c, bw * 0.92f, bh * 0.88f, m * 0.25f, colors[3], 15)
-        bmp = b
+        try {
+            val opts = BitmapFactory.Options()
+            opts.inScaled = false
+            val srcBmp = BitmapFactory.decodeResource(resources, R.drawable.background, opts)
+            if (srcBmp != null) {
+                val scaled = Bitmap.createScaledBitmap(srcBmp, w, h, true)
+                bmp = scaled
+                srcBmp.recycle()
+            }
+        } catch (e: Exception) {
+            // Fallback to dark background if image fails
+            bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bmp?.eraseColor(PremiumColors.BACKGROUND_DEEP)
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -539,10 +513,9 @@ class MainActivity : Activity() {
     private lateinit var appsRow: LinearLayout
     private lateinit var clockText: TextView
     private lateinit var dateText: TextView
-    private lateinit var dockRow: LinearLayout
-    private lateinit var profile1View: View
-    private lateinit var profile2View: View
-    private lateinit var moonView: View
+    private lateinit var weatherText: TextView
+    private lateinit var temperatureText: TextView
+    private lateinit var weatherIcon: WeatherView
     private lateinit var wifi: WifiView
     private lateinit var prefs: SharedPreferences
     private var tim: TvInputManager? = null
@@ -551,15 +524,6 @@ class MainActivity : Activity() {
     private var pendingTile: Tile? = null
     private lateinit var staticBg: StaticBackground
     private var currentColorMode: ColorMode = ColorMode.EMERALD
-
-    private val dateFmt = java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.US).apply {
-        timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
-    }
-    private val clockFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply {
-        timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
-    }
-    @Volatile private var loading = false
-    private var pendingTile: Tile? = null
     private lateinit var heroUpdate: UpdateView
     private var lastUpdateCheck = -1L
     @Volatile private var latestBuild = 0
@@ -567,8 +531,43 @@ class MainActivity : Activity() {
     private var progressDlg: Dialog? = null
     private var progressTv: TextView? = null
     private val myBuild: Int by lazy { currentBuild() }
-    private lateinit var staticBg: StaticBackground
-    private var currentColorMode: ColorMode = ColorMode.EMERALD
+    private var lastWeather = -1L
+    private var weatherFailed = false
+
+    // Prayer times
+    private var prayerTimes: PrayerTimesData? = null
+    private var lastPrayerFetch = -1L
+    private var prayerFetchFailed = false
+    private lateinit var prayerText: TextView
+    private lateinit var prayerNextText: TextView
+    private lateinit var prayerText2: TextView
+    private lateinit var prayerNextText2: TextView
+    private var prayerDay = ""
+
+    // Prayer times data
+    private data class PrayerTime(
+        val name: String,
+        val time: String,
+        val hour: Int,
+        val minute: Int
+    )
+
+    private data class PrayerTimesData(
+        val fajr: PrayerTime,
+        val dhuhr: PrayerTime,
+        val asr: PrayerTime,
+        val maghrib: PrayerTime,
+        val isha: PrayerTime,
+        val date: String,
+        val hijri: String = ""
+    )
+
+    private val dateFmt = java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
+    }
+    private val clockFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply {
+        timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
+    }
 
     private val installReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -601,6 +600,19 @@ class MainActivity : Activity() {
             val online = isOnline()
             wifi.on = online
             updateClock()
+            updatePrayerWidget()
+
+            val weatherInterval = if (weatherFailed) 60_000L else 15 * 60 * 1000L
+            if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > weatherInterval) {
+                lastWeather = SystemClock.elapsedRealtime()
+                fetchWeather()
+            }
+
+            val prayerInterval = if (prayerFetchFailed) 30_000L else 12 * 60 * 60 * 1000L
+            if (lastPrayerFetch < 0 || SystemClock.elapsedRealtime() - lastPrayerFetch > prayerInterval) {
+                lastPrayerFetch = SystemClock.elapsedRealtime()
+                fetchPrayerTimes()
+            }
 
             if (lastUpdateCheck < 0 || SystemClock.elapsedRealtime() - lastUpdateCheck > 6 * 60 * 60 * 1000L) {
                 lastUpdateCheck = SystemClock.elapsedRealtime()
@@ -633,12 +645,13 @@ class MainActivity : Activity() {
 
         gap = u(16f)
         padH = u(46f)
-        cardW = (W * 0.19f).toInt()
+        // Calculate card width for exactly 4 cards per row
+        val availableWidth = W - (2 * padH) - (3 * gap)
+        cardW = (availableWidth / 4).toInt()
         cardH = cardW * 9 / 16
 
         val root = FrameLayout(this)
         staticBg = StaticBackground(this)
-        staticBg.setColorMode(currentColorMode)
         root.addView(staticBg, MATCH, MATCH)
 
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -646,8 +659,30 @@ class MainActivity : Activity() {
 
         favRow = row(); recentRow = row(); inputsRow = row(); appsRow = row()
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
-        content.addView(header("Keep watching")); content.addView(shelf(favRow))
-        content.addView(header("Recent")); content.addView(shelf(recentRow))
+
+        // Prayer times widget
+        val prayerWidget = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padH, u(20f), padH, u(20f))
+            background = GlassDrawable(u(30f).toFloat(),
+                withAlpha(PremiumColors.ACCENT_EMERALD, 35), withAlpha(PremiumColors.ACCENT_EMERALD, 18), 0.6f, true)
+        }
+        val line1 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        prayerText = tv("Loading prayer times\u2026", 18f, PremiumColors.TEXT_PRIMARY, true).apply { minWidth = u(210f) }
+        line1.addView(prayerText)
+        prayerNextText = tv("", 16f, PremiumColors.ACCENT_EMERALD, true)
+        line1.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
+        prayerWidget.addView(line1)
+        val line2 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        prayerText2 = tv("", 18f, PremiumColors.TEXT_PRIMARY, true).apply { minWidth = u(210f) }
+        line2.addView(prayerText2)
+        prayerNextText2 = tv("", 16f, PremiumColors.ACCENT_EMERALD, true)
+        line2.addView(prayerNextText2, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
+        prayerWidget.addView(line2, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
+        content.addView(prayerWidget, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = u(20f) })
+
+        content.addView(header("Recent")); content.addView(shelf(favRow))
+
         content.addView(header("Inputs")); content.addView(shelf(inputsRow))
         content.addView(header("All Apps")); content.addView(shelf(appsRow))
         shelves = ScrollView(this).apply {
@@ -658,13 +693,6 @@ class MainActivity : Activity() {
             addView(content, MATCH, WRAP)
         }
         col.addView(shelves, LinearLayout.LayoutParams(MATCH, 0, 1f))
-
-        // Dock at bottom (iPhone-style)
-        dockRow = row()
-        dockRow.setPadding(padH, u(20f), padH, u(24f))
-        dockRow.background = GlassDrawable(u(34f).toFloat(),
-            Color.argb(60, 255, 255, 255), Color.argb(30, 255, 255, 255), 0.8f, true)
-        col.addView(dockRow, LinearLayout.LayoutParams(MATCH, WRAP))
 
         root.addView(col, MATCH, MATCH)
         setContentView(root)
@@ -709,53 +737,57 @@ class MainActivity : Activity() {
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() { /* launcher: stay home */ }
 
-    // ---------- top bar + hero ----------
+    // ---------- top bar ----------
 
-    private fun capsule(): GlassDrawable = GlassDrawable(u(40f).toFloat(),
+    private fun capsule(): GlassDrawable = GlassDrawable(u(34f).toFloat(),
         Color.argb(45, 255, 255, 255), Color.argb(20, 255, 255, 255), 0.7f, true)
 
     private fun buildTopBar(): View {
         val bar = FrameLayout(this).apply {
-            setPadding(padH, u(32f), padH, 0)
+            setPadding(padH, u(40f), padH, 0)
         }
-
-        // Left side: Profile icons
-        val leftSide = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        profile1View = ProfileView(this)
-        leftSide.addView(profile1View, LinearLayout.LayoutParams(u(48f), u(48f)).apply { rightMargin = u(12f) })
-        profile2View = ProfileView(this).apply { alpha = 0.5f }
-        leftSide.addView(profile2View, LinearLayout.LayoutParams(u(48f), u(48f)))
-        bar.addView(leftSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.START or Gravity.TOP))
 
         // Center: Large clock and date (iPhone lock screen style)
         val centerCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
         }
-        clockText = tv("", 90f, PremiumColors.TEXT_PRIMARY, true).apply {
+        clockText = tv("", 110f, PremiumColors.TEXT_PRIMARY, true).apply {
+            gravity = Gravity.CENTER
+            letterSpacing = 0.1f
+            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+        }
+        dateText = tv("", 20f, PremiumColors.TEXT_SECONDARY, false).apply {
             gravity = Gravity.CENTER
             letterSpacing = 0.05f
         }
-        dateText = tv("", 22f, PremiumColors.TEXT_SECONDARY, false).apply {
-            gravity = Gravity.CENTER
-            letterSpacing = 0.02f
-        }
         centerCol.addView(clockText)
-        centerCol.addView(dateText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
+        centerCol.addView(dateText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
         bar.addView(centerCol, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER or Gravity.TOP))
 
-        // Right side: Moon icon + wifi
+        // Right side: Temperature + weather + wifi
         val rightSide = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
+            setPadding(u(16f), u(12f), u(20f), u(12f))
+            background = capsule()
+        }
+        val topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        moonView = MoonView(this)
-        rightSide.addView(moonView, LinearLayout.LayoutParams(u(44f), u(44f)).apply { rightMargin = u(16f) })
+        weatherIcon = WeatherView(this)
+        topRow.addView(weatherIcon, LinearLayout.LayoutParams(u(28f), u(28f)).apply { rightMargin = u(10f) })
+        weatherText = tv("Loading weather…", 18f, PremiumColors.TEXT_SECONDARY, true)
+        topRow.addView(weatherText)
         wifi = WifiView(this)
-        rightSide.addView(wifi, LinearLayout.LayoutParams(u(32f), u(26f)))
+        topRow.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { leftMargin = u(16f) })
+        rightSide.addView(topRow)
+        temperatureText = tv("", 16f, PremiumColors.TEXT_PRIMARY, true).apply {
+            gravity = Gravity.END
+            topMargin = u(6f)
+        }
+        rightSide.addView(temperatureText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
         bar.addView(rightSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.TOP))
 
         updateClock()
@@ -803,6 +835,218 @@ class MainActivity : Activity() {
             c.sslSocketFactory = permissiveSslContext.socketFactory
         }
         try { return c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
+    }
+
+    private val riyadhTz: java.util.TimeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
+
+    private val hijriMonths = arrayOf("Muharram", "Safar", "Rabi al-Awwal", "Rabi al-Thani",
+        "Jumada al-Ula", "Jumada al-Thani", "Rajab", "Shaban", "Ramadan", "Shawwal", "Dhul Qadah", "Dhul Hijjah")
+
+    private fun todayKey(): String {
+        val f = java.text.SimpleDateFormat("dd-MM-yyyy", java.util.Locale.US)
+        f.timeZone = riyadhTz
+        return f.format(java.util.Date())
+    }
+
+    private fun parseHm(s: String): Pair<Int, Int> {
+        val m = Regex("(\\d{1,2}):(\\d{2})").find(s) ?: throw IllegalArgumentException("bad time")
+        return Pair(m.groupValues[1].toInt(), m.groupValues[2].toInt())
+    }
+
+    private fun fmt12(h: Int, m: Int): String {
+        val hh = if (h % 12 == 0) 12 else h % 12
+        return String.format(java.util.Locale.US, "%d:%02d %s", hh, m, if (h < 12) "AM" else "PM")
+    }
+
+    private fun buildPrayerData(timings: JSONObject, date: String, hijri: String): PrayerTimesData {
+        fun one(name: String): PrayerTime {
+            val hm = parseHm(timings.getString(name))
+            return PrayerTime(name, String.format(java.util.Locale.US, "%02d:%02d", hm.first, hm.second), hm.first, hm.second)
+        }
+        return PrayerTimesData(one("Fajr"), one("Dhuhr"), one("Asr"), one("Maghrib"), one("Isha"), date, hijri)
+    }
+
+    private fun fetchPrayerTimes() {
+        Thread {
+            var data: PrayerTimesData? = null
+            var fromNetwork = false
+            try {
+                val day = todayKey()
+                val url = "https://api.aladhan.com/v1/timings/" + day +
+                    "?latitude=24.7003&longitude=46.6955&method=4&timezonestring=Asia/Riyadh&calendarMethod=UAQ"
+                val d = JSONObject(httpGet(url)).getJSONObject("data")
+                val timings = d.getJSONObject("timings")
+                val dateObj = d.getJSONObject("date")
+                val date = dateObj.getString("readable")
+                var hijri = ""
+                try {
+                    val hj = dateObj.getJSONObject("hijri")
+                    val hm = hj.getJSONObject("month").getInt("number")
+                    hijri = hj.getString("day").toInt().toString() + " " + hijriMonths[hm - 1] + " " + hj.getString("year")
+                } catch (e: Exception) { }
+                data = buildPrayerData(timings, date, hijri)
+                fromNetwork = true
+                prayerDay = day
+            } catch (e: Exception) {
+                val cached = prefs.getString("cached_prayer_times", null)
+                if (cached != null) {
+                    try {
+                        val json = JSONObject(cached)
+                        data = buildPrayerData(json.getJSONObject("timings"), json.getString("date"), json.optString("hijri", ""))
+                    } catch (e2: Exception) { }
+                }
+            }
+
+            val got = data
+            if (got != null) {
+                prayerTimes = got
+                prayerFetchFailed = !fromNetwork
+                if (fromNetwork) {
+                    try {
+                        val cacheJson = JSONObject()
+                        val timingsJson = JSONObject()
+                        timingsJson.put("Fajr", got.fajr.time)
+                        timingsJson.put("Dhuhr", got.dhuhr.time)
+                        timingsJson.put("Asr", got.asr.time)
+                        timingsJson.put("Maghrib", got.maghrib.time)
+                        timingsJson.put("Isha", got.isha.time)
+                        cacheJson.put("timings", timingsJson)
+                        cacheJson.put("date", got.date)
+                        cacheJson.put("hijri", got.hijri)
+                        prefs.edit().putString("cached_prayer_times", cacheJson.toString()).apply()
+                    } catch (e: Exception) { }
+                }
+            } else {
+                prayerFetchFailed = true
+            }
+
+            runOnUiThread {
+                updatePrayerWidget()
+            }
+        }.start()
+    }
+
+    private fun nowSeconds(): Int {
+        val c = java.util.Calendar.getInstance(riyadhTz)
+        return c.get(java.util.Calendar.HOUR_OF_DAY) * 3600 + c.get(java.util.Calendar.MINUTE) * 60 + c.get(java.util.Calendar.SECOND)
+    }
+
+    private fun nextTwoPrayers(): List<PrayerTime>? {
+        val p = prayerTimes ?: return null
+        val list = listOf(p.fajr, p.dhuhr, p.asr, p.maghrib, p.isha)
+        val now = nowSeconds()
+        var i = list.indexOfFirst { it.hour * 3600 + it.minute * 60 > now }
+        if (i < 0) i = 0
+        return listOf(list[i], list[(i + 1) % list.size])
+    }
+
+    private fun secondsUntil(pt: PrayerTime): Int {
+        var diff = pt.hour * 3600 + pt.minute * 60 - nowSeconds()
+        if (diff <= 0) diff += 24 * 3600
+        return diff
+    }
+
+    private fun updatePrayerWidget() {
+        if (prayerDay.isNotEmpty() && prayerDay != todayKey()) {
+            prayerDay = ""
+            lastPrayerFetch = -1L
+        }
+        val two = nextTwoPrayers()
+        if (two != null) {
+            val a = two[0]
+            val b = two[1]
+            prayerText.text = a.name + "  " + fmt12(a.hour, a.minute)
+            prayerText2.text = b.name + "  " + fmt12(b.hour, b.minute)
+            val s1 = secondsUntil(a)
+            val s2 = secondsUntil(b)
+            prayerNextText.text = "time left  " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s1 / 3600, (s1 % 3600) / 60, s1 % 60)
+            prayerNextText2.text = "time left  " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s2 / 3600, (s2 % 3600) / 60, s2 % 60)
+            prayerNextText.setTextColor(if (s1 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
+            prayerNextText2.setTextColor(if (s2 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
+        } else {
+            prayerText.text = "Loading prayer times\u2026"
+            prayerText2.text = ""
+            prayerNextText.text = ""
+            prayerNextText2.text = ""
+        }
+    }
+
+    // ---------- weather ----------
+
+    private fun kindFor(code: Int, day: Boolean): Int = when (code) {
+        0, 1 -> if (day) 0 else 1
+        in 51..67, in 80..82 -> 3
+        in 95..99 -> 4
+        else -> 2
+    }
+
+    private fun fetchWeather() {
+        Thread {
+            var temp = 0
+            var text = ""
+            var kind = 2
+            var ok = false
+            val errs = ArrayList<String>()
+            try {
+                val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
+                val cur = JSONObject(body).getJSONObject("current")
+                temp = Math.round(cur.getDouble("temperature_2m")).toInt()
+                val code = cur.getInt("weather_code")
+                text = describe(code)
+                kind = kindFor(code, cur.optInt("is_day", 1) == 1)
+                ok = true
+            } catch (e: Exception) { errs.add("OpenMeteo: " + e.javaClass.simpleName + (e.message?.let { ": " + it.take(30) } ?: "")) }
+            if (!ok) {
+                for (base in listOf("https://wttr.in", "http://wttr.in")) {
+                    try {
+                        val parts = httpGet("$base/Riyadh?format=%t|%C").trim().split("|")
+                        val num = Regex("-?[0-9]+").find(parts[0])?.value?.toIntOrNull()
+                        if (num != null) {
+                            temp = num
+                            text = if (parts.size > 1) parts[1].trim() else ""
+                            val low = text.lowercase()
+                            val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+                            val day = hr in 6..17
+                            kind = when {
+                                low.contains("thunder") -> 4
+                                low.contains("rain") || low.contains("drizzle") || low.contains("shower") -> 3
+                                low.contains("sun") || low.contains("clear") -> if (day) 0 else 1
+                                else -> 2
+                            }
+                            ok = true
+                            break
+                        }
+                    } catch (e: Exception) { errs.add("wttr(${base.take(6)}): " + e.javaClass.simpleName) }
+                }
+            }
+            val t2 = "$temp°  $text"
+            runOnUiThread {
+                if (ok) {
+                    weatherFailed = false
+                    if (weatherText.text.toString() != t2) weatherText.text = t2
+                    if (temperatureText.text.toString() != "$temp°") temperatureText.text = "$temp°"
+                    weatherIcon.kind = kind
+                } else {
+                    weatherFailed = true
+                    val why = errs.joinToString("  /  ")
+                    val cur = weatherText.text.toString()
+                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "weather error: $why"
+                }
+            }
+        }.start()
+    }
+
+    private fun describe(code: Int): String = when (code) {
+        0 -> "Clear"
+        1 -> "Mostly clear"
+        2 -> "Partly cloudy"
+        3 -> "Cloudy"
+        45, 48 -> "Fog"
+        in 51..57 -> "Drizzle"
+        in 61..67, in 80..82 -> "Rain"
+        in 71..77, 85, 86 -> "Snow"
+        in 95..99 -> "Thunderstorm"
+        else -> ""
     }
 
     private fun isOnline(): Boolean {
@@ -945,20 +1189,43 @@ class MainActivity : Activity() {
     }
 
     private fun populateApps(tiles: List<Tile>) {
-        favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews(); dockRow.removeAllViews()
-        val favs = pickFavorites(tiles)
-        favs.forEachIndexed { i, t -> favRow.addView(buildCard(t, i < favs.size - 1)) }
-        tiles.forEachIndexed { i, t -> appsRow.addView(buildCard(t, i < tiles.size - 1)) }
+        favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews()
+        val favs = pickFavorites(tiles).take(4)
+        // Display favorites in a grid of 4
+        val favGridRow = createGridRow(favs)
+        favRow.addView(favGridRow)
+        // Display all apps in grid rows of 4
+        tiles.chunked(4).forEach { chunk ->
+            appsRow.addView(createGridRow(chunk))
+        }
         populateRecent(tiles)
-        populateDock(tiles)
         if (currentFocus == null) favRow.getChildAt(0)?.requestFocus()
+    }
+
+    private fun createGridRow(tiles: List<Tile>): LinearLayout {
+        val gridRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            clipChildren = false
+            clipToPadding = false
+        }
+        tiles.forEachIndexed { i, t ->
+            gridRow.addView(buildCard(t, false))
+            if (i < tiles.size - 1) {
+                val spacer = View(this)
+                gridRow.addView(spacer, LinearLayout.LayoutParams(gap, 0))
+            }
+        }
+        return gridRow
     }
 
     private fun populateRecent(tiles: List<Tile>) {
         val recentJson = prefs.getString("recent_apps", null) ?: ""
         val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }.take(6).toSet()
-        val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(6)
-        recentTiles.forEachIndexed { i, t -> recentRow.addView(buildCard(t, i < recentTiles.size - 1)) }
+        val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(4)
+        recentTiles.chunked(4).forEach { chunk ->
+            recentRow.addView(createGridRow(chunk))
+        }
     }
 
     private fun populateDock(tiles: List<Tile>) {
@@ -1080,6 +1347,7 @@ class MainActivity : Activity() {
 
     private fun refreshInputs(focusN: Int) {
         inputsRow.removeAllViews()
+        val inputTiles = ArrayList<Tile>()
         for (n in 1..HDMI_COUNT) {
             val id = inputIdFor(n)
             val name = hdmiName(n)
@@ -1088,18 +1356,21 @@ class MainActivity : Activity() {
                 3 -> Color.argb(130, 26, 26, 26) // Dark for TV BOX
                 else -> 0xFF2C3550.toInt()
             }
-            inputsRow.addView(buildCard(
-                Tile(1, name, "HDMI $n   ·   OK: inputs   ·   Hold OK: rename",
-                    color, null, id, "", n), true))
+            inputTiles.add(Tile(1, name, "HDMI $n   ·   OK: inputs   ·   Hold OK: rename",
+                    color, null, id, "", n))
         }
-        inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", PremiumColors.BACKGROUND_CARD and 0xFFFFFF, null), true))
-        inputsRow.addView(buildCard(Tile(5, "OPTIONS", "Appearance and launcher settings", PremiumColors.ACCENT_AMETHYST, null), true))
+        inputTiles.add(Tile(2, "Settings", "System settings", PremiumColors.BACKGROUND_CARD and 0xFFFFFF, null))
+        inputTiles.add(Tile(5, "OPTIONS", "Appearance and launcher settings", PremiumColors.ACCENT_AMETHYST, null))
         val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
                   else "Press OK to download the latest version from GitHub"
-        inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))
-        inputsRow.addView(buildCard(Tile(6, "DELETE UI", "Uninstall TV Home app", 0xFFDC2626.toInt(), null), true))
-        inputsRow.addView(buildCard(Tile(4, "Find inputs", "Find the app that switches your TV's HDMI inputs", 0xFF2F4A3C.toInt(), null), false))
-        if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(focusN - 1)?.requestFocus()
+        inputTiles.add(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null))
+        inputTiles.add(Tile(6, "DELETE UI", "Uninstall TV Home app", 0xFFDC2626.toInt(), null))
+        inputTiles.add(Tile(4, "Find inputs", "Find the app that switches your TV's HDMI inputs", 0xFF2F4A3C.toInt(), null))
+
+        inputTiles.chunked(4).forEach { chunk ->
+            inputsRow.addView(createGridRow(chunk))
+        }
+        if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(0)?.getChildAt(focusN - 1)?.requestFocus()
     }
 
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
@@ -1397,7 +1668,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun buildCard(t: Tile, notLast: Boolean): View {
+    private fun buildCard(t: Tile): View {
         val r = dp(26).toFloat()
         val frame = FrameLayout(this)
         frame.outlineProvider = roundOutline(r)
@@ -1582,7 +1853,7 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 26) box.setDefaultFocusHighlightEnabled(false)
         box.addView(frame, LinearLayout.LayoutParams(cardW, cardH))
         box.addView(label, LinearLayout.LayoutParams(cardW, WRAP))
-        box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP).apply { rightMargin = if (notLast) gap else 0 }
+        box.layoutParams = LinearLayout.LayoutParams(cardW, WRAP)
 
         box.setOnClickListener {
             when (t.kind) {
@@ -1889,7 +2160,7 @@ class MainActivity : Activity() {
         }
 
     private fun row(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.HORIZONTAL
+        orientation = LinearLayout.VERTICAL
         clipChildren = false
         clipToPadding = false
     }
@@ -1898,13 +2169,8 @@ class MainActivity : Activity() {
         setPadding(padH, u(16f), padH, 0)
     }
 
-    private fun shelf(row: LinearLayout): HorizontalScrollView = HorizontalScrollView(this).apply {
-        isHorizontalScrollBarEnabled = false
-        overScrollMode = View.OVER_SCROLL_NEVER
-        clipChildren = false
-        clipToPadding = false
+    private fun shelf(row: LinearLayout): View = row.apply {
         setPadding(padH, u(16f), padH, u(30f))
-        addView(row)
     }
 
     // ---------- colors ----------
