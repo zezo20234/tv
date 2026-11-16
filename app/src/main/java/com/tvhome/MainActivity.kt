@@ -40,6 +40,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.WriterException
 import com.google.zxing.qrcode.QRCodeWriter
 import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
@@ -1137,70 +1138,85 @@ class MainActivity : Activity() {
 
     private fun handleHttpRequest(client: Socket) {
         try {
-            val reader = InputStreamReader(client.getInputStream())
+            val reader = BufferedReader(InputStreamReader(client.getInputStream()))
             val writer = OutputStreamWriter(client.getOutputStream())
             val line = reader.readLine()
 
-            if (line != null && line.contains("GET")) {
-                val path = line.split(" ")[1]
+            if (line != null) {
+                val parts = line.split(" ")
+                if (parts.size >= 2) {
+                    val method = parts[0]
+                    val path = parts[1]
 
-                when {
-                    path == "/" || path == "/index.html" -> {
-                        val html = buildHtml()
-                        writer.write("HTTP/1.1 200 OK\r\n")
-                        writer.write("Content-Type: text/html\r\n")
-                        writer.write("Content-Length: ${html.length}\r\n")
-                        writer.write("\r\n")
-                        writer.write(html)
-                    }
-                    path.startsWith("/api/reminders") -> {
-                        when {
-                            line.contains("POST") -> {
-                                // Add reminder
-                                val body = StringBuilder()
-                                while (reader.ready()) body.append(reader.read().toChar())
-                                val params = parseFormData(body.toString())
-                                val newReminder = Reminder(
-                                    id = System.currentTimeMillis().toString(),
-                                    name = params["name"] ?: "Untitled",
-                                    hour = params["hour"]?.toIntOrNull() ?: 12,
-                                    minute = params["minute"]?.toIntOrNull() ?: 0,
-                                    recurrence = params["recurrence"] ?: "once",
-                                    alertMinutes = params["alertMinutes"]?.toIntOrNull() ?: 5
-                                )
-                                reminders.add(newReminder)
-                                saveReminders()
-                                writer.write("HTTP/1.1 200 OK\r\n\r\nOK")
-                            }
-                            line.contains("DELETE") -> {
-                                // Delete reminder
-                                val id = path.substringAfterLast("/").substringBefore("?")
-                                reminders.removeIf { it.id == id }
-                                saveReminders()
-                                writer.write("HTTP/1.1 200 OK\r\n\r\nOK")
-                            }
-                            else -> {
-                                // Get reminders
-                                val arr = org.json.JSONArray()
-                                for (r in reminders) {
-                                    val obj = org.json.JSONObject()
-                                    obj.put("id", r.id)
-                                    obj.put("name", r.name)
-                                    obj.put("hour", r.hour)
-                                    obj.put("minute", r.minute)
-                                    obj.put("recurrence", r.recurrence)
-                                    obj.put("alertMinutes", r.alertMinutes)
-                                    arr.put(obj)
+                    when {
+                        (path == "/" || path == "/index.html") && method == "GET" -> {
+                            val html = buildHtml()
+                            writer.write("HTTP/1.1 200 OK\r\n")
+                            writer.write("Content-Type: text/html\r\n")
+                            writer.write("Content-Length: ${html.length}\r\n")
+                            writer.write("\r\n")
+                            writer.write(html)
+                        }
+                        path.startsWith("/api/reminders") -> {
+                            when (method) {
+                                "POST" -> {
+                                    // Read headers to get content length
+                                    var contentLength = 0
+                                    var headerLine: String?
+                                    while (reader.readLine().also { headerLine = it } != null && headerLine!!.isNotEmpty()) {
+                                        if (headerLine!!.lowercase().startsWith("content-length:")) {
+                                            contentLength = headerLine!!.substringAfter(":").trim().toIntOrNull() ?: 0
+                                        }
+                                    }
+                                    // Read body
+                                    val body = CharArray(contentLength)
+                                    reader.read(body, 0, contentLength)
+                                    val params = parseFormData(String(body))
+                                    val newReminder = Reminder(
+                                        id = System.currentTimeMillis().toString(),
+                                        name = params["name"] ?: "Untitled",
+                                        hour = params["hour"]?.toIntOrNull() ?: 12,
+                                        minute = params["minute"]?.toIntOrNull() ?: 0,
+                                        recurrence = params["recurrence"] ?: "once",
+                                        alertMinutes = params["alertMinutes"]?.toIntOrNull() ?: 5
+                                    )
+                                    reminders.add(newReminder)
+                                    saveReminders()
+                                    writer.write("HTTP/1.1 200 OK\r\n\r\nOK")
                                 }
-                                writer.write("HTTP/1.1 200 OK\r\n")
-                                writer.write("Content-Type: application/json\r\n")
-                                writer.write("\r\n")
-                                writer.write(arr.toString())
+                                "DELETE" -> {
+                                    // Delete reminder
+                                    val id = path.substringAfterLast("/").substringBefore("?")
+                                    reminders.removeIf { it.id == id }
+                                    saveReminders()
+                                    writer.write("HTTP/1.1 200 OK\r\n\r\nOK")
+                                }
+                                "GET" -> {
+                                    // Get reminders
+                                    val arr = org.json.JSONArray()
+                                    for (r in reminders) {
+                                        val obj = org.json.JSONObject()
+                                        obj.put("id", r.id)
+                                        obj.put("name", r.name)
+                                        obj.put("hour", r.hour)
+                                        obj.put("minute", r.minute)
+                                        obj.put("recurrence", r.recurrence)
+                                        obj.put("alertMinutes", r.alertMinutes)
+                                        arr.put(obj)
+                                    }
+                                    writer.write("HTTP/1.1 200 OK\r\n")
+                                    writer.write("Content-Type: application/json\r\n")
+                                    writer.write("\r\n")
+                                    writer.write(arr.toString())
+                                }
+                                else -> {
+                                    writer.write("HTTP/1.1 405 Method Not Allowed\r\n\r\n")
+                                }
                             }
                         }
-                    }
-                    else -> {
-                        writer.write("HTTP/1.1 404 Not Found\r\n\r\n")
+                        else -> {
+                            writer.write("HTTP/1.1 404 Not Found\r\n\r\n")
+                        }
                     }
                 }
             }
