@@ -683,7 +683,7 @@ class MainActivity : Activity() {
             setPadding(u(40f), u(40f), u(40f), u(40f))
         }
         prayerAlertView = FrameLayout(this).apply {
-            background = Color.argb(230, 220, 38, 38)
+            background = GradientDrawable().apply { setColor(Color.argb(230, 220, 38, 38)) }
             visibility = View.GONE
             addView(prayerAlertText, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER))
             setOnClickListener {
