@@ -508,7 +508,6 @@ class MainActivity : Activity() {
 
     private lateinit var shelves: ScrollView
     private lateinit var favRow: LinearLayout
-    private lateinit var recentRow: LinearLayout
     private lateinit var inputsRow: LinearLayout
     private lateinit var appsRow: LinearLayout
     private lateinit var clockText: TextView
@@ -657,7 +656,7 @@ class MainActivity : Activity() {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(buildTopBar(), LinearLayout.LayoutParams(MATCH, WRAP))
 
-        favRow = row(); recentRow = row(); inputsRow = row(); appsRow = row()
+        favRow = row(); inputsRow = row(); appsRow = row()
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
 
         // Prayer times widget
@@ -785,7 +784,6 @@ class MainActivity : Activity() {
         rightSide.addView(topRow)
         temperatureText = tv("", 16f, PremiumColors.TEXT_PRIMARY, true).apply {
             gravity = Gravity.END
-            topMargin = u(6f)
         }
         rightSide.addView(temperatureText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
         bar.addView(rightSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.TOP))
@@ -1189,7 +1187,7 @@ class MainActivity : Activity() {
     }
 
     private fun populateApps(tiles: List<Tile>) {
-        favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews()
+        favRow.removeAllViews(); appsRow.removeAllViews()
         val favs = pickFavorites(tiles).take(4)
         // Display favorites in a grid of 4
         val favGridRow = createGridRow(favs)
@@ -1198,7 +1196,6 @@ class MainActivity : Activity() {
         tiles.chunked(4).forEach { chunk ->
             appsRow.addView(createGridRow(chunk))
         }
-        populateRecent(tiles)
         if (currentFocus == null) favRow.getChildAt(0)?.requestFocus()
     }
 
@@ -1210,86 +1207,13 @@ class MainActivity : Activity() {
             clipToPadding = false
         }
         tiles.forEachIndexed { i, t ->
-            gridRow.addView(buildCard(t, false))
+            gridRow.addView(buildCard(t))
             if (i < tiles.size - 1) {
                 val spacer = View(this)
                 gridRow.addView(spacer, LinearLayout.LayoutParams(gap, 0))
             }
         }
         return gridRow
-    }
-
-    private fun populateRecent(tiles: List<Tile>) {
-        val recentJson = prefs.getString("recent_apps", null) ?: ""
-        val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }.take(6).toSet()
-        val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(4)
-        recentTiles.chunked(4).forEach { chunk ->
-            recentRow.addView(createGridRow(chunk))
-        }
-    }
-
-    private fun populateDock(tiles: List<Tile>) {
-        // Add up to 10 favorite apps to the dock (like iOS dock)
-        val dockKeys = listOf("netflix", "youtube", "prime", "disney", "shahid", "spotify", "hbo", "apple", "browser", "multimedia")
-        val dockTiles = ArrayList<Tile>()
-        for (k in dockKeys) {
-            val m = tiles.firstOrNull { !dockTiles.contains(it) && (it.title.lowercase().contains(k) || it.pkg.lowercase().contains(k)) }
-            if (m != null) dockTiles.add(m)
-            if (dockTiles.size == 10) break
-        }
-        // Fill remaining slots with any apps
-        for (t in tiles) { if (!dockTiles.contains(t)) dockTiles.add(t); if (dockTiles.size == 10) break }
-
-        dockTiles.forEachIndexed { i, t ->
-            val dockItem = buildDockItem(t)
-            dockRow.addView(dockItem, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = if (i < dockTiles.size - 1) u(16f) else 0 })
-        }
-    }
-
-    private fun buildDockItem(t: Tile): View {
-        val size = u(56f)
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            isFocusable = true
-            isClickable = true
-            setPadding(u(8f), u(8f), u(8f), u(8f))
-        }
-
-        val iconBg = FrameLayout(this).apply {
-            background = GlassDrawable(u(16f).toFloat(),
-                withAlpha(t.color, 180), withAlpha(t.color, 100), 0.6f, true)
-        }
-        iconBg.addView(View(this).apply {
-            background = GradientDrawable().apply {
-                cornerRadius = u(14f).toFloat()
-                setColor(withAlpha(t.color, 120))
-            }
-        }, FrameLayout.LayoutParams(MATCH, MATCH))
-        iconBg.addView(tv(t.title.first().toString(), 28f, Color.WHITE, true).apply {
-            gravity = Gravity.CENTER
-        }, FrameLayout.LayoutParams(MATCH, MATCH))
-        box.addView(iconBg, LinearLayout.LayoutParams(size, size))
-
-        val label = tv(t.title.take(10), 12f, PremiumColors.TEXT_SECONDARY, true).apply {
-            gravity = Gravity.CENTER
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.END
-        }
-        box.addView(label, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(6f) })
-
-        box.setOnClickListener { launchApp(t) }
-        box.setOnFocusChangeListener { _, f ->
-            box.animate().cancel()
-            if (f) {
-                box.animate().scaleX(1.15f).scaleY(1.15f).setDuration(200).start()
-                label.setTextColor(PremiumColors.TEXT_PRIMARY)
-            } else {
-                box.animate().scaleX(1f).scaleY(1f).setDuration(150).start()
-                label.setTextColor(PremiumColors.TEXT_SECONDARY)
-            }
-        }
-        return box
     }
 
     private fun addToRecent(pkg: String) {
@@ -1370,7 +1294,10 @@ class MainActivity : Activity() {
         inputTiles.chunked(4).forEach { chunk ->
             inputsRow.addView(createGridRow(chunk))
         }
-        if (focusN in 1..HDMI_COUNT) inputsRow.getChildAt(0)?.getChildAt(focusN - 1)?.requestFocus()
+        if (focusN in 1..HDMI_COUNT) {
+            val firstRow = inputsRow.getChildAt(0) as? LinearLayout
+            firstRow?.getChildAt(focusN - 1)?.requestFocus()
+        }
     }
 
     private fun tifWorks(): Boolean = try { tim?.tvInputList?.isNotEmpty() == true } catch (e: Exception) { false }
@@ -1997,7 +1924,6 @@ class MainActivity : Activity() {
                 modeButtons.forEach { it.alpha = 0.5f }
                 btn.alpha = 1f
                 currentColorMode = mode
-                staticBg.setColorMode(mode)
                 prefs.edit().putString("color_mode", mode.displayName).apply()
             }
             if (mode == currentColorMode) btn.alpha = 1f else btn.alpha = 0.5f
