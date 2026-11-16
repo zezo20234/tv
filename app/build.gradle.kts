@@ -2,24 +2,19 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
 android {
-    namespace = "com.tvhome"
+    namespace = "com.tvhome.launcher"
     compileSdk = 34
+
     defaultConfig {
-        applicationId = "com.tvhome.app"
-        minSdk = 21
+        applicationId = "com.tvhome.launcher"
+        minSdk = 23
         targetSdk = 34
-        versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 15) + 15
-        versionName = "15.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
+        versionCode = 1
+        versionName = "1.0"
     }
-    signingConfigs {
-        getByName("debug") {
-            storeFile = file("tvhome.jks")
-            storePassword = "tvhome123"
-            keyAlias = "tvhome"
-            keyPassword = "tvhome123"
-        }
-    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
