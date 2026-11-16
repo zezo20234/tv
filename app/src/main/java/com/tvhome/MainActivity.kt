@@ -763,11 +763,11 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
         }
-        clockText = tv("", 150f, Color.argb(150, 255, 255, 255), true).apply {
+        clockText = tv("", 150f, Color.argb(180, 255, 255, 255), true).apply {
             gravity = Gravity.CENTER
             letterSpacing = -0.03f
-            typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
-            setShadowLayer(u(10f).toFloat(), 0f, u(6f).toFloat(), Color.argb(60, 0, 0, 0))
+            typeface = Typeface.create("sans-serif", Typeface.BOLD)
+            setShadowLayer(u(12f).toFloat(), 0f, u(8f).toFloat(), Color.argb(80, 0, 0, 0))
         }
         dateText = tv("", 24f, Color.argb(160, 255, 255, 255), false).apply {
             gravity = Gravity.CENTER
@@ -813,6 +813,8 @@ class MainActivity : Activity() {
         if (clockText.text.toString() != t) clockText.text = t
         val d = dateFmt.format(java.util.Date())
         if (dateText.text.toString() != d) dateText.text = d
+        // Update text colors based on background
+        updateTextColorsBasedOnBackground()
     }
 
     // Hero section - DISABLED FOR iPHONE UI
@@ -969,9 +971,20 @@ class MainActivity : Activity() {
         if (two != null) {
             val a = two[0]
             val b = two[1]
-            prayerText.text = a.name + "  " + fmt12(a.hour, a.minute)
             val s1 = secondsUntil(a)
-            prayerNextText.text = b.name + "  " + fmt12(b.hour, b.minute)
+            val s2 = secondsUntil(b)
+
+            // Format duration helper
+            fun formatDuration(seconds: Int): String {
+                return when {
+                    seconds < 60 -> "${seconds}s"
+                    seconds < 3600 -> "${seconds / 60}m"
+                    else -> "${seconds / 3600}h ${seconds % 3600 / 60}m"
+                }
+            }
+
+            prayerText.text = a.name + "  " + fmt12(a.hour, a.minute) + "  (${formatDuration(s1)})"
+            prayerNextText.text = b.name + "  " + fmt12(b.hour, b.minute) + "  (${formatDuration(s2)})"
             prayerNextText.setTextColor(if (s1 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
 
             // Check if it's prayer time (within 1 minute)
@@ -2167,5 +2180,65 @@ class MainActivity : Activity() {
                 Color.HSVToColor(hsv)
             }
         } catch (e: Exception) { fallback }
+    }
+
+    // Dynamic text color based on background brightness
+    private fun getContrastTextColor(backgroundColor: Int): Int {
+        val r = Color.red(backgroundColor)
+        val g = Color.green(backgroundColor)
+        val b = Color.blue(backgroundColor)
+        // Calculate luminance (perceived brightness)
+        val luminance = (0.299 * r + 0.587 * g + 0.114 * b)
+        // If background is light (luminance > 128), use black text; otherwise white
+        return if (luminance > 128) Color.BLACK else Color.WHITE
+    }
+
+    private fun updateTextColorsBasedOnBackground() {
+        // Sample background color at center of screen (where clock is)
+        val centerX = W / 2
+        val centerY = H / 3
+
+        try {
+            val opts = BitmapFactory.Options()
+            opts.inScaled = false
+            val srcBmp = BitmapFactory.decodeResource(resources, R.drawable.background, opts)
+            if (srcBmp != null) {
+                val scaled = Bitmap.createScaledBitmap(srcBmp, W, H, true)
+                srcBmp.recycle()
+
+                // Sample multiple points around the text areas
+                val samplePoints = listOf(
+                    Pair(centerX, centerY), // Clock area
+                    Pair(centerX, centerY + u(100f).toInt()), // Date area
+                    Pair(u(100f).toInt(), u(80f).toInt()), // Prayer area (left)
+                    Pair(W - u(100f).toInt(), u(80f).toInt()) // Weather area (right)
+                )
+
+                var totalLuminance = 0.0
+                for ((x, y) in samplePoints) {
+                    if (x < scaled.width && y < scaled.height) {
+                        val pixel = scaled.getPixel(x.coerceIn(0, scaled.width - 1), y.coerceIn(0, scaled.height - 1))
+                        val r = Color.red(pixel)
+                        val g = Color.green(pixel)
+                        val b = Color.blue(pixel)
+                        totalLuminance += (0.299 * r + 0.587 * g + 0.114 * b)
+                    }
+                }
+                scaled.recycle()
+
+                val avgLuminance = totalLuminance / samplePoints.size
+                val useBlackText = avgLuminance > 128
+
+                // Apply to clock
+                clockText.setTextColor(if (useBlackText) Color.argb(220, 0, 0, 0) else Color.argb(180, 255, 255, 255))
+                dateText.setTextColor(if (useBlackText) Color.argb(200, 0, 0, 0) else Color.argb(160, 255, 255, 255))
+                prayerText.setTextColor(if (useBlackText) Color.argb(220, 0, 0, 0) else PremiumColors.TEXT_PRIMARY)
+                weatherText.setTextColor(if (useBlackText) Color.argb(220, 0, 0, 0) else PremiumColors.TEXT_PRIMARY)
+                lowTempText.setTextColor(if (useBlackText) Color.argb(150, 0, 0, 0) else PremiumColors.TEXT_SECONDARY)
+                highTempText.setTextColor(if (useBlackText) Color.argb(150, 0, 0, 0) else PremiumColors.TEXT_SECONDARY)
+            }
+        } catch (e: Exception) {
+            // Fallback to white if sampling fails
+        }
     }
 }
