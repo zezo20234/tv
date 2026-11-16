@@ -524,24 +524,6 @@ class MainActivity : Activity() {
         val art: Bitmap?, val pkg: String = "", val cls: String = "", val n: Int = 0
     )
 
-    /** Prayer times data */
-    private data class PrayerTime(
-        val name: String,
-        val time: String,
-        val hour: Int,
-        val minute: Int
-    )
-
-    private data class PrayerTimesData(
-        val fajr: PrayerTime,
-        val dhuhr: PrayerTime,
-        val asr: PrayerTime,
-        val maghrib: PrayerTime,
-        val isha: PrayerTime,
-        val date: String,
-        val hijri: String = ""
-    )
-
     private val handler = Handler(Looper.getMainLooper())
     private var W = 1000
     private var H = 600
@@ -557,31 +539,25 @@ class MainActivity : Activity() {
     private lateinit var appsRow: LinearLayout
     private lateinit var clockText: TextView
     private lateinit var dateText: TextView
-    private lateinit var weatherIcon: WeatherView
     private lateinit var dockRow: LinearLayout
     private lateinit var profile1View: View
     private lateinit var profile2View: View
     private lateinit var moonView: View
+    private lateinit var wifi: WifiView
+    private lateinit var prefs: SharedPreferences
+    private var tim: TvInputManager? = null
+    private var lastSig = ""
+    @Volatile private var loading = false
+    private var pendingTile: Tile? = null
+    private lateinit var staticBg: StaticBackground
+    private var currentColorMode: ColorMode = ColorMode.EMERALD
 
-    // Prayer times - DISABLED FOR iPHONE UI
-    private var prayerTimes: PrayerTimesData? = null
-    private var lastPrayerFetch = -1L
-    private var prayerFetchFailed = false
-    private lateinit var prayerText: TextView
-    private lateinit var prayerNextText: TextView
-    private lateinit var prayerText2: TextView
-    private lateinit var prayerNextText2: TextView
     private val dateFmt = java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.US).apply {
         timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
     }
     private val clockFmt = java.text.SimpleDateFormat("h:mm a", java.util.Locale.US).apply {
         timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
     }
-    private lateinit var weatherIcon: WeatherView
-    private lateinit var wifi: WifiView
-    private lateinit var prefs: SharedPreferences
-    private var tim: TvInputManager? = null
-    private var lastSig = ""
     @Volatile private var loading = false
     private var pendingTile: Tile? = null
     private lateinit var heroUpdate: UpdateView
@@ -593,15 +569,6 @@ class MainActivity : Activity() {
     private val myBuild: Int by lazy { currentBuild() }
     private lateinit var staticBg: StaticBackground
     private var currentColorMode: ColorMode = ColorMode.EMERALD
-
-    // Prayer times
-    private var prayerTimes: PrayerTimesData? = null
-    private var lastPrayerFetch = -1L
-    private var prayerFetchFailed = false
-    private lateinit var prayerText: TextView
-    private lateinit var prayerNextText: TextView
-    private lateinit var prayerText2: TextView
-    private lateinit var prayerNextText2: TextView
 
     private val installReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -826,7 +793,7 @@ class MainActivity : Activity() {
         // Hero focus disabled for iPhone-style UI
     }
 
-    // ---------- prayer times (Aladhan API, no key) - DISABLED FOR iPHONE UI ----------
+    // ---------- HTTP helper ----------
 
     private fun httpGet(url: String): String {
         val c = URL(url).openConnection() as HttpURLConnection
@@ -836,91 +803,6 @@ class MainActivity : Activity() {
             c.sslSocketFactory = permissiveSslContext.socketFactory
         }
         try { return c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
-    }
-
-    private val riyadhTz: java.util.TimeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
-    private var prayerDay = ""
-
-    private val hijriMonths = arrayOf("Muharram", "Safar", "Rabi al-Awwal", "Rabi al-Thani",
-        "Jumada al-Ula", "Jumada al-Thani", "Rajab", "Shaban", "Ramadan", "Shawwal", "Dhul Qadah", "Dhul Hijjah")
-
-    private fun todayKey(): String {
-        val f = java.text.SimpleDateFormat("dd-MM-yyyy", java.util.Locale.US)
-        f.timeZone = riyadhTz
-        return f.format(java.util.Date())
-    }
-
-    private fun parseHm(s: String): Pair<Int, Int> {
-        val m = Regex("(\\d{1,2}):(\\d{2})").find(s) ?: throw IllegalArgumentException("bad time")
-        return Pair(m.groupValues[1].toInt(), m.groupValues[2].toInt())
-    }
-
-    private fun fmt12(h: Int, m: Int): String {
-        val hh = if (h % 12 == 0) 12 else h % 12
-        return String.format(java.util.Locale.US, "%d:%02d %s", hh, m, if (h < 12) "AM" else "PM")
-    }
-
-    private fun buildPrayerData(timings: JSONObject, date: String, hijri: String): PrayerTimesData {
-        fun one(name: String): PrayerTime {
-            val hm = parseHm(timings.getString(name))
-            return PrayerTime(name, String.format(java.util.Locale.US, "%02d:%02d", hm.first, hm.second), hm.first, hm.second)
-        }
-        return PrayerTimesData(one("Fajr"), one("Dhuhr"), one("Asr"), one("Maghrib"), one("Isha"), date, hijri)
-    }
-
-    private fun fetchPrayerTimes() {
-        // Prayer times fetch disabled for simplified iPhone-style UI
-    }
-
-    private fun nowSeconds(): Int {
-        val c = java.util.Calendar.getInstance(riyadhTz)
-        return c.get(java.util.Calendar.HOUR_OF_DAY) * 3600 + c.get(java.util.Calendar.MINUTE) * 60 + c.get(java.util.Calendar.SECOND)
-    }
-
-    /** The next prayer and the one after it (wraps past Isha to tomorrow's Fajr). */
-    private fun nextTwoPrayers(): List<PrayerTime>? {
-        val p = prayerTimes ?: return null
-        val list = listOf(p.fajr, p.dhuhr, p.asr, p.maghrib, p.isha)
-        val now = nowSeconds()
-        var i = list.indexOfFirst { it.hour * 3600 + it.minute * 60 > now }
-        if (i < 0) i = 0
-        return listOf(list[i], list[(i + 1) % list.size])
-    }
-
-    private fun secondsUntil(pt: PrayerTime): Int {
-        var diff = pt.hour * 3600 + pt.minute * 60 - nowSeconds()
-        if (diff <= 0) diff += 24 * 3600
-        return diff
-    }
-
-    private fun updatePrayerWidget() {
-        // Prayer widget update disabled for simplified iPhone-style UI
-    }
-
-    // ---------- weather (Open-Meteo, no key) - DISABLED FOR iPHONE UI ----------
-
-    private fun kindFor(code: Int, day: Boolean): Int = when (code) {
-        0, 1 -> if (day) 0 else 1
-        in 51..67, in 80..82 -> 3
-        in 95..99 -> 4
-        else -> 2
-    }
-
-    private fun fetchWeather() {
-        // Weather fetch disabled for simplified iPhone-style UI
-    }
-
-    private fun describe(code: Int): String = when (code) {
-        0 -> "Clear"
-        1 -> "Mostly clear"
-        2 -> "Partly cloudy"
-        3 -> "Cloudy"
-        45, 48 -> "Fog"
-        in 51..57 -> "Drizzle"
-        in 61..67, in 80..82 -> "Rain"
-        in 71..77, 85, 86 -> "Snow"
-        in 95..99 -> "Thunderstorm"
-        else -> ""
     }
 
     private fun isOnline(): Boolean {
@@ -1211,7 +1093,7 @@ class MainActivity : Activity() {
                     color, null, id, "", n), true))
         }
         inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", PremiumColors.BACKGROUND_CARD and 0xFFFFFF, null), true))
-        inputsRow.addView(buildCard(Tile(5, "OPTIONS", "Appearance, prayer times, and launcher settings", PremiumColors.ACCENT_AMETHYST, null), true))
+        inputsRow.addView(buildCard(Tile(5, "OPTIONS", "Appearance and launcher settings", PremiumColors.ACCENT_AMETHYST, null), true))
         val sub = if (latestBuild > myBuild) "Build $latestBuild is available   ·   Press OK to install"
                   else "Press OK to download the latest version from GitHub"
         inputsRow.addView(buildCard(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null), true))

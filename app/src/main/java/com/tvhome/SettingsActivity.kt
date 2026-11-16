@@ -82,12 +82,6 @@ class SettingsActivity : Activity() {
         content.addView(buildColorModeRow())
         content.addView(buildSeparator())
 
-        // Prayer times section
-        content.addView(sectionHeader("Prayer Times"))
-        content.addView(buildPrayerInfoRow())
-        content.addView(buildChimeRow(), LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = u(10f) })
-        content.addView(buildSeparator())
-
         // Launcher settings section
         content.addView(sectionHeader("Launcher"))
         content.addView(buildFavoritesRow())
@@ -144,38 +138,6 @@ class SettingsActivity : Activity() {
         return row
     }
 
-    private fun buildPrayerInfoRow(): LinearLayout {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(u(16f), u(16f), u(16f), u(16f))
-            background = rowBackground()
-            isFocusable = true
-            isClickable = true
-            setOnClickListener { showPrayerInfoDialog() }
-            setOnFocusChangeListener { _, f -> updateRowBackground(this, f) }
-        }
-
-        val icon = TextView(this).apply {
-            text = "🕌"
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, u(28f).toFloat())
-            setPadding(u(20f), u(12f), u(20f), u(12f))
-        }
-        row.addView(icon)
-
-        val textCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        textCol.addView(tv("Prayer Times", 18f, PremiumColors.TEXT_PRIMARY, true))
-        textCol.addView(tv("View prayer times for Riyadh", 14f, PremiumColors.TEXT_TERTIARY).apply {
-            setPadding(0, u(4f), 0, 0)
-        })
-        row.addView(textCol, LinearLayout.LayoutParams(0, WRAP, 1f))
-
-        val arrow = tv("›", 24f, PremiumColors.TEXT_TERTIARY).apply { setPadding(u(16f), 0, 0, 0) }
-        row.addView(arrow)
-
-        return row
-    }
-
     private fun buildFavoritesRow(): LinearLayout {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -205,53 +167,6 @@ class SettingsActivity : Activity() {
         val arrow = tv("›", 24f, PremiumColors.TEXT_TERTIARY).apply { setPadding(u(16f), 0, 0, 0) }
         row.addView(arrow)
 
-        return row
-    }
-
-    private fun to12(s: String): String {
-        val m = Regex("(\\d{1,2}):(\\d{2})").find(s) ?: return s
-        val h = m.groupValues[1].toInt()
-        val hh = if (h % 12 == 0) 12 else h % 12
-        return hh.toString() + ":" + m.groupValues[2] + (if (h < 12) " AM" else " PM")
-    }
-
-    private fun buildChimeRow(): LinearLayout {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(u(16f), u(16f), u(16f), u(16f))
-            background = rowBackground()
-            isFocusable = true
-            isClickable = true
-            setOnFocusChangeListener { _, f -> updateRowBackground(this, f) }
-        }
-        val icon = TextView(this).apply {
-            text = "\uD83D\uDD14"
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, u(28f).toFloat())
-            setPadding(u(20f), u(12f), u(20f), u(12f))
-        }
-        row.addView(icon)
-        val textCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        textCol.addView(tv("Prayer chime", 18f, PremiumColors.TEXT_PRIMARY, true))
-        textCol.addView(tv("A soft, low chime when it is time to pray", 14f, PremiumColors.TEXT_TERTIARY).apply {
-            setPadding(0, u(4f), 0, 0)
-        })
-        row.addView(textCol, LinearLayout.LayoutParams(0, WRAP, 1f))
-        val state = tv("", 18f, PremiumColors.ACCENT_EMERALD, true)
-        row.addView(state)
-        fun refresh() {
-            val on = prefs.getBoolean("chime_on", true)
-            state.text = if (on) "ON" else "OFF"
-            state.setTextColor(if (on) PremiumColors.ACCENT_EMERALD else PremiumColors.TEXT_TERTIARY)
-        }
-        refresh()
-        row.setOnClickListener {
-            val on = !prefs.getBoolean("chime_on", true)
-            prefs.edit().putBoolean("chime_on", on).apply()
-            if (on) SoftChime.play()
-            PrayerAlarm.schedule(applicationContext)
-            refresh()
-        }
         return row
     }
 
@@ -330,78 +245,6 @@ class SettingsActivity : Activity() {
         }
         dlg.show()
         modeButtons.find { it.text == currentMode }?.requestFocus()
-    }
-
-    private fun showPrayerInfoDialog() {
-        val dlg = Dialog(this)
-        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
-        val panel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(u(28f), u(24f), u(28f), u(24f))
-            background = GradientDrawable().apply {
-                cornerRadius = u(28f).toFloat()
-                setColor(PremiumColors.BACKGROUND_CHARCOAL)
-                setStroke(max(1, u(1f)), PremiumColors.BORDER_SUBTLE)
-            }
-        }
-        panel.addView(tv("Prayer Times - Riyadh", 24f, PremiumColors.TEXT_PRIMARY, true))
-        panel.addView(tv("Sulaymaniyah District \u00B7 Umm al-Qura", 14f, PremiumColors.TEXT_SECONDARY).apply {
-            setPadding(0, u(6f), 0, u(20f))
-        })
-
-        // Prayer times display
-        val prayerRow = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(u(16f), u(16f), u(16f), u(16f))
-            background = GradientDrawable().apply {
-                cornerRadius = u(16f).toFloat()
-                setColor(PremiumColors.BACKGROUND_CARD)
-            }
-        }
-
-        val cached = prefs.getString("cached_prayer_times", null)
-        if (cached != null) {
-            try {
-                val json = org.json.JSONObject(cached)
-                val timings = json.getJSONObject("timings")
-                val date = json.getString("date")
-
-                prayerRow.addView(tv(date, 14f, PremiumColors.TEXT_SECONDARY).apply {
-                    setPadding(0, 0, 0, u(12f))
-                })
-
-                val prayers = listOf("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha")
-                for (prayer in prayers) {
-                    val pRow = LinearLayout(this).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        setPadding(0, u(8f), 0, u(8f))
-                    }
-                    pRow.addView(tv(prayer, 16f, PremiumColors.TEXT_PRIMARY, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-                    pRow.addView(tv(to12(timings.getString(prayer)), 16f, PremiumColors.ACCENT_EMERALD, true))
-                    prayerRow.addView(pRow)
-                }
-            } catch (e: Exception) {
-                prayerRow.addView(tv("Prayer times not available", 16f, PremiumColors.TEXT_TERTIARY))
-            }
-        } else {
-            prayerRow.addView(tv("Prayer times not available yet", 16f, PremiumColors.TEXT_TERTIARY))
-        }
-
-        panel.addView(prayerRow)
-
-        val buttons = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(0, u(18f), 0, 0)
-        }
-        buttons.addView(pill("Close", false) { dlg.dismiss() })
-        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
-        dlg.setContentView(panel)
-        dlg.window?.apply {
-            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-            setLayout(u(520f), WindowManager.LayoutParams.WRAP_CONTENT)
-            setDimAmount(0.65f)
-        }
-        dlg.show()
     }
 
     private fun showFavoritesDialog() {
