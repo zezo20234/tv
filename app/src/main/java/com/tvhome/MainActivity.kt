@@ -99,7 +99,7 @@ object PremiumColors {
     const val SURFACE_GLASS = 0x33FFFFFF.toInt()
     const val SURFACE_GLASS_DARK = 0x1AFFFFFF.toInt()
     const val BORDER_SUBTLE = 0x1AFFFFFF.toInt()
-    const val_BORDER_FOCUS = 0x40FFFFFF.toInt()
+    const val BORDER_FOCUS = 0x40FFFFFF.toInt()
 }
 
 enum class ColorMode(val displayName: String, val colors: List<Int>) {
@@ -739,7 +739,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(u(14f), u(6f), u(20f), u(6f))
             background = GlassDrawable(u(36f).toFloat(),
-                Color.argb(35, PremiumColors.ACCENT_EMERALD and 0xFFFFFF, Color.argb(18, PremiumColors.ACCENT_EMERALD and 0xFFFFFF), 0.6f, true)
+                withAlpha(PremiumColors.ACCENT_EMERALD, 35), withAlpha(PremiumColors.ACCENT_EMERALD, 18), 0.6f, true)
         }
         prayerText = tv("Loading prayer times…", 16f, PremiumColors.TEXT_PRIMARY, true)
         prayerRow.addView(prayerText)
@@ -796,7 +796,7 @@ class MainActivity : Activity() {
         heroBtn = tv("Open", 19f, PremiumColors.TEXT_PRIMARY, true).apply {
             gravity = Gravity.CENTER
             background = GlassDrawable(u(40f).toFloat(),
-                Color.argb(70, PremiumColors.ACCENT_EMERALD and 0xFFFFFF, Color.argb(40, PremiumColors.ACCENT_EMERALD and 0xFFFFFF), 0.8f, true)
+                withAlpha(PremiumColors.ACCENT_EMERALD, 70), withAlpha(PremiumColors.ACCENT_EMERALD, 40), 0.8f, true)
         }
         val tw = (W * 0.46f).toInt()
         text.addView(heroTitle, LinearLayout.LayoutParams(tw, u(58f)))
@@ -1626,12 +1626,12 @@ class MainActivity : Activity() {
                 val bgColor = when {
                     isPs5 -> Color.argb(110, 0, 48, 135)
                     isTvBox -> Color.argb(110, 26, 26, 26)
-                    else -> Color.argb(110, PremiumColors.BACKGROUND_CARD and 0xFFFFFF)
+                    else -> withAlpha(PremiumColors.BACKGROUND_CARD, 110)
                 }
                 val bgEnd = when {
                     isPs5 -> Color.argb(70, 0, 20, 80)
                     isTvBox -> Color.argb(70, 10, 10, 10)
-                    else -> Color.argb(70, PremiumColors.BACKGROUND_CHARCOAL and 0xFFFFFF)
+                    else -> withAlpha(PremiumColors.BACKGROUND_CHARCOAL, 70)
                 }
                 frame.background = GlassDrawable(r, bgColor, bgEnd, 0f, false)
                 val pw = (cardW * 0.40f).toInt()
@@ -1678,7 +1678,7 @@ class MainActivity : Activity() {
                 })
             }
             4 -> {
-                frame.background = GlassDrawable(r, Color.argb(120, PremiumColors.ACCENT_EMERALD and 0xFFFFFF), Color.argb(80, 35, 100, 75), 0f, false)
+                frame.background = GlassDrawable(r, withAlpha(PremiumColors.ACCENT_EMERALD, 120), Color.argb(80, 35, 100, 75), 0f, false)
                 val pw = (cardW * 0.40f).toInt()
                 frame.addView(HdmiPortView(this),
                     FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -1688,7 +1688,7 @@ class MainActivity : Activity() {
                     FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
             }
             3 -> {
-                frame.background = GlassDrawable(r, Color.argb(180, PremiumColors.ACCENT_EMERALD and 0xFFFFFF), Color.argb(150, 25, 80, 200), 0f, false)
+                frame.background = GlassDrawable(r, withAlpha(PremiumColors.ACCENT_EMERALD, 180), Color.argb(150, 25, 80, 200), 0f, false)
                 val gs = (cardH * 0.40f).toInt()
                 frame.addView(UpdateView(this),
                     FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -1707,7 +1707,7 @@ class MainActivity : Activity() {
             }
             5 -> {
                 // OPTIONS card
-                frame.background = GlassDrawable(r, Color.argb(170, PremiumColors.ACCENT_AMETHYST and 0xFFFFFF), Color.argb(130, 88, 28, 135), 0f, false)
+                frame.background = GlassDrawable(r, withAlpha(PremiumColors.ACCENT_AMETHYST, 170), Color.argb(130, 88, 28, 135), 0f, false)
                 val gs = (cardH * 0.42f).toInt()
                 frame.addView(OptionsView(this),
                     FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -1718,7 +1718,7 @@ class MainActivity : Activity() {
             }
             6 -> {
                 // DELETE UI card
-                frame.background = GlassDrawable(r, Color.argb(190, PremiumColors.ACCENT_ROSE and 0xFFFFFF), Color.argb(160, 185, 28, 28), 0f, false)
+                frame.background = GlassDrawable(r, withAlpha(PremiumColors.ACCENT_ROSE, 190), Color.argb(160, 185, 28, 28), 0f, false)
                 val gs = (cardH * 0.42f).toInt()
                 val deleteIcon = TextView(this).apply {
                     text = "×"
@@ -1733,7 +1733,7 @@ class MainActivity : Activity() {
                     FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
             }
             else -> {
-                frame.background = GlassDrawable(r, Color.argb(110, PremiumColors.BACKGROUND_CARD and 0xFFFFFF), Color.argb(70, PremiumColors.BACKGROUND_CHARCOAL and 0xFFFFFF), 0f, false)
+                frame.background = GlassDrawable(r, withAlpha(PremiumColors.BACKGROUND_CARD, 110), withAlpha(PremiumColors.BACKGROUND_CHARCOAL, 70), 0f, false)
                 val gs = (cardH * 0.42f).toInt()
                 frame.addView(GearView(this),
                     FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {

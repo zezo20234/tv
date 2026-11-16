@@ -222,7 +222,7 @@ class SettingsActivity : Activity() {
 
     private fun showColorModeDialog() {
         val dlg = Dialog(this)
-        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(u(28f), u(24f), u(28f), u(24f))
@@ -286,7 +286,7 @@ class SettingsActivity : Activity() {
 
     private fun showPrayerInfoDialog() {
         val dlg = Dialog(this)
-        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(u(28f), u(24f), u(28f), u(24f))
@@ -358,7 +358,7 @@ class SettingsActivity : Activity() {
 
     private fun showFavoritesDialog() {
         val dlg = Dialog(this)
-        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(u(28f), u(24f), u(28f), u(24f))
@@ -403,7 +403,7 @@ class SettingsActivity : Activity() {
         t.gravity = Gravity.CENTER
         t.isFocusable = true
         t.isClickable = true
-        setPadding(u(26f), u(11f), u(26f), u(11f))
+        t.setPadding(u(26f), u(11f), u(26f), u(11f))
         paint(false)
         t.setOnFocusChangeListener { _, f -> paint(f) }
         t.setOnClickListener { onClick() }

@@ -9,7 +9,7 @@
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
     <application
-        android:label="TV Home v20"
+        android:label="TV Home v14"
         android:hardwareAccelerated="true"
         android:usesCleartextTraffic="true"
         android:theme="@style/AppTheme">
@@ -37,11 +37,6 @@
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|uiMode|density|fontScale" />
         <activity
             android:name=".FinderActivity"
-            android:exported="false"
-            android:screenOrientation="landscape"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
-        <activity
-            android:name=".SettingsActivity"
             android:exported="false"
             android:screenOrientation="landscape"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
