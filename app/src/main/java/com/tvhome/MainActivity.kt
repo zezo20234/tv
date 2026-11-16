@@ -468,6 +468,50 @@ class OptionsView(ctx: Context) : View(ctx) {
     }
 }
 
+/** Profile circle icon (like iOS user profile) */
+class ProfileView(ctx: Context) : View(ctx) {
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF5AC8FA.toInt() }
+    private val face = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    override fun onDraw(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val cx = w / 2f
+        val cy = h / 2f
+        val r = min(w, h) / 2f
+
+        // Circle background
+        canvas.drawCircle(cx, cy, r, fill)
+
+        // Simple face (head + shoulders)
+        val headR = r * 0.35f
+        canvas.drawCircle(cx, cy - r * 0.15f, headR, face)
+        // Shoulders (arc)
+        val shoulderRect = RectF(cx - r * 0.6f, cy + r * 0.15f, cx + r * 0.6f, cy + r * 1.2f)
+        canvas.drawArc(shoulderRect, 0f, 180f, false, face)
+    }
+}
+
+/** Moon icon (like iOS Do Not Disturb) */
+class MoonView(ctx: Context) : View(ctx) {
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFD60A.toInt() }
+    private val path = Path()
+    override fun onDraw(canvas: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val cx = w / 2f
+        val cy = h / 2f
+        val r = min(w, h) / 2f
+
+        path.reset()
+        // Crescent moon shape
+        path.addCircle(cx, cy, r * 0.85f, Path.Direction.CW)
+        val cutout = Path()
+        cutout.addCircle(cx + r * 0.3f, cy - r * 0.1f, r * 0.7f, Path.Direction.CW)
+        path.op(cutout, Path.Op.DIFFERENCE)
+        canvas.drawPath(path, fill)
+    }
+}
+
 // ======================= Activity =======================
 
 class MainActivity : Activity() {
@@ -511,19 +555,22 @@ class MainActivity : Activity() {
     private lateinit var recentRow: LinearLayout
     private lateinit var inputsRow: LinearLayout
     private lateinit var appsRow: LinearLayout
-    private lateinit var heroTitle: TextView
-    private lateinit var heroBtn: TextView
-    private lateinit var heroSub: TextView
-    private lateinit var heroFrame: FrameLayout
-    private lateinit var heroImg: RoundedImageView
-    private lateinit var heroPort: HdmiPortView
-    private lateinit var heroPs5: Ps5ConsoleView
-    private lateinit var heroBox: TvBoxView
-    private lateinit var heroGear: GearView
-    private lateinit var weatherText: TextView
-    private lateinit var greeting: TextView
     private lateinit var clockText: TextView
     private lateinit var dateText: TextView
+    private lateinit var weatherIcon: WeatherView
+    private lateinit var dockRow: LinearLayout
+    private lateinit var profile1View: View
+    private lateinit var profile2View: View
+    private lateinit var moonView: View
+
+    // Prayer times - DISABLED FOR iPHONE UI
+    private var prayerTimes: PrayerTimesData? = null
+    private var lastPrayerFetch = -1L
+    private var prayerFetchFailed = false
+    private lateinit var prayerText: TextView
+    private lateinit var prayerNextText: TextView
+    private lateinit var prayerText2: TextView
+    private lateinit var prayerNextText2: TextView
     private val dateFmt = java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.US).apply {
         timeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
     }
@@ -536,8 +583,6 @@ class MainActivity : Activity() {
     private var tim: TvInputManager? = null
     private var lastSig = ""
     @Volatile private var loading = false
-    private var lastWeather = -1L
-    private var weatherFailed = false
     private var pendingTile: Tile? = null
     private lateinit var heroUpdate: UpdateView
     private var lastUpdateCheck = -1L
@@ -584,27 +629,11 @@ class MainActivity : Activity() {
         PremiumColors.ACCENT_ROSE, 0xFF0EA5E9.toInt(), 0xFF8B5CF6.toInt(), 0xFFF43F5E.toInt(), 0xFF10B981.toInt()
     )
 
-    private val heroRunnable = Runnable { pendingTile?.let { applyHero(it) } }
-
     private val ticker = object : Runnable {
         override fun run() {
             val online = isOnline()
             wifi.on = online
-            updateGreeting()
             updateClock()
-            updatePrayerWidget() // Update prayer countdown every second
-
-            val weatherInterval = if (weatherFailed) 60_000L else 15 * 60 * 1000L
-            if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > weatherInterval) {
-                lastWeather = SystemClock.elapsedRealtime()
-                fetchWeather()
-            }
-
-            val prayerInterval = if (prayerFetchFailed) 30_000L else 12 * 60 * 60 * 1000L
-            if (lastPrayerFetch < 0 || SystemClock.elapsedRealtime() - lastPrayerFetch > prayerInterval) {
-                lastPrayerFetch = SystemClock.elapsedRealtime()
-                fetchPrayerTimes()
-            }
 
             if (lastUpdateCheck < 0 || SystemClock.elapsedRealtime() - lastUpdateCheck > 6 * 60 * 60 * 1000L) {
                 lastUpdateCheck = SystemClock.elapsedRealtime()
@@ -614,7 +643,7 @@ class MainActivity : Activity() {
                     }
                 }.start()
             }
-            handler.postDelayed(this, 1000L) // Update every second for prayer countdown
+            handler.postDelayed(this, 1000L)
         }
     }
 
@@ -647,11 +676,10 @@ class MainActivity : Activity() {
 
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         col.addView(buildTopBar(), LinearLayout.LayoutParams(MATCH, WRAP))
-        col.addView(buildHero(), LinearLayout.LayoutParams(MATCH, (H * 0.33f).toInt()))
 
         favRow = row(); recentRow = row(); inputsRow = row(); appsRow = row()
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
-        content.addView(header("Favorites")); content.addView(shelf(favRow))
+        content.addView(header("Keep watching")); content.addView(shelf(favRow))
         content.addView(header("Recent")); content.addView(shelf(recentRow))
         content.addView(header("Inputs")); content.addView(shelf(inputsRow))
         content.addView(header("All Apps")); content.addView(shelf(appsRow))
@@ -663,6 +691,14 @@ class MainActivity : Activity() {
             addView(content, MATCH, WRAP)
         }
         col.addView(shelves, LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        // Dock at bottom (iPhone-style)
+        dockRow = row()
+        dockRow.setPadding(padH, u(20f), padH, u(24f))
+        dockRow.background = GlassDrawable(u(34f).toFloat(),
+            Color.argb(60, 255, 255, 255), Color.argb(30, 255, 255, 255), 0.8f, true)
+        col.addView(dockRow, LinearLayout.LayoutParams(MATCH, WRAP))
+
         root.addView(col, MATCH, MATCH)
         setContentView(root)
 
@@ -689,18 +725,11 @@ class MainActivity : Activity() {
         super.onResume()
         refreshApps(false)
         refreshInputs(0)
-        // Initial prayer times fetch
-        if (lastPrayerFetch < 0) {
-            lastPrayerFetch = SystemClock.elapsedRealtime()
-            fetchPrayerTimes()
-        }
-        PrayerAlarm.schedule(applicationContext)
         handler.post(ticker)
     }
 
     override fun onPause() {
         handler.removeCallbacks(ticker)
-        handler.removeCallbacks(heroRunnable)
         super.onPause()
     }
 
@@ -719,154 +748,68 @@ class MainActivity : Activity() {
         Color.argb(45, 255, 255, 255), Color.argb(20, 255, 255, 255), 0.7f, true)
 
     private fun buildTopBar(): View {
-        val bar = LinearLayout(this).apply {
+        val bar = FrameLayout(this).apply {
+            setPadding(padH, u(32f), padH, 0)
+        }
+
+        // Left side: Profile icons
+        val leftSide = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.TOP
-            setPadding(padH, u(24f), padH, 0)
-        }
-        val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        greeting = tv("Hello", 34f, PremiumColors.TEXT_PRIMARY, false)
-        left.addView(greeting)
-
-        // Weather row
-        val wrow = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(u(14f), u(7f), u(20f), u(7f))
-            background = capsule()
         }
-        weatherIcon = WeatherView(this)
-        wrow.addView(weatherIcon, LinearLayout.LayoutParams(u(28f), u(28f)).apply { rightMargin = u(10f) })
-        weatherText = tv("Riyadh   loading weather…", 18f, PremiumColors.TEXT_SECONDARY, true)
-        wrow.addView(weatherText)
-        left.addView(wrow, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(10f) })
+        profile1View = ProfileView(this)
+        leftSide.addView(profile1View, LinearLayout.LayoutParams(u(48f), u(48f)).apply { rightMargin = u(12f) })
+        profile2View = ProfileView(this).apply { alpha = 0.5f }
+        leftSide.addView(profile2View, LinearLayout.LayoutParams(u(48f), u(48f)))
+        bar.addView(leftSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.START or Gravity.TOP))
 
-        // Prayer times row
-        val prayerRow = LinearLayout(this).apply {
+        // Center: Large clock and date (iPhone lock screen style)
+        val centerCol = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(u(18f), u(8f), u(22f), u(8f))
-            background = GlassDrawable(u(30f).toFloat(),
-                withAlpha(PremiumColors.ACCENT_EMERALD, 35), withAlpha(PremiumColors.ACCENT_EMERALD, 18), 0.6f, true)
+            gravity = Gravity.CENTER
         }
-        // first prayer on top, second prayer below, each with its own "time left"
-        val line1 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        prayerText = tv("Loading prayer times\u2026", 16f, PremiumColors.TEXT_PRIMARY, true).apply { minWidth = u(210f) }
-        line1.addView(prayerText)
-        prayerNextText = tv("", 14f, PremiumColors.ACCENT_EMERALD, true)
-        line1.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
-        prayerRow.addView(line1)
-        val line2 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        prayerText2 = tv("", 16f, PremiumColors.TEXT_PRIMARY, true).apply { minWidth = u(210f) }
-        line2.addView(prayerText2)
-        prayerNextText2 = tv("", 14f, PremiumColors.ACCENT_EMERALD, true)
-        line2.addView(prayerNextText2, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
-        prayerRow.addView(line2, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
-        left.addView(prayerRow, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
+        clockText = tv("", 90f, PremiumColors.TEXT_PRIMARY, true).apply {
+            gravity = Gravity.CENTER
+            letterSpacing = 0.05f
+        }
+        dateText = tv("", 22f, PremiumColors.TEXT_SECONDARY, false).apply {
+            gravity = Gravity.CENTER
+            letterSpacing = 0.02f
+        }
+        centerCol.addView(clockText)
+        centerCol.addView(dateText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
+        bar.addView(centerCol, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER or Gravity.TOP))
 
-        bar.addView(left, LinearLayout.LayoutParams(0, WRAP, 1f))
-
-        val right = LinearLayout(this).apply {
+        // Right side: Moon icon + wifi
+        val rightSide = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(u(26f), u(12f), u(32f), u(12f))
-            background = GlassDrawable(u(34f).toFloat(), Color.argb(45, 255, 255, 255), Color.argb(20, 255, 255, 255), 0.7f, true)
         }
+        moonView = MoonView(this)
+        rightSide.addView(moonView, LinearLayout.LayoutParams(u(44f), u(44f)).apply { rightMargin = u(16f) })
         wifi = WifiView(this)
-        right.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { rightMargin = u(18f) })
-        val timeCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        clockText = tv("", 40f, PremiumColors.TEXT_PRIMARY, true)
-        dateText = tv("", 16f, PremiumColors.TEXT_SECONDARY, false)
-        timeCol.addView(clockText)
-        timeCol.addView(dateText)
-        right.addView(timeCol)
-        bar.addView(right, LinearLayout.LayoutParams(WRAP, WRAP))
-        updateGreeting()
+        rightSide.addView(wifi, LinearLayout.LayoutParams(u(32f), u(26f)))
+        bar.addView(rightSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.TOP))
+
         updateClock()
-        updatePrayerWidget()
         return bar
     }
 
     private fun updateClock() {
-        val t = clockFmt.format(java.util.Date())   // always 12-hour, always current
+        val t = clockFmt.format(java.util.Date())
         if (clockText.text.toString() != t) clockText.text = t
-        val d = dateFmt.format(java.util.Date())   // day + date
+        val d = dateFmt.format(java.util.Date())
         if (dateText.text.toString() != d) dateText.text = d
     }
 
-    private fun updateGreeting() {
-        val h = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Riyadh")).get(java.util.Calendar.HOUR_OF_DAY)
-        val g = when {
-            h in 5..11 -> "Good morning"
-            h in 12..16 -> "Good afternoon"
-            h in 17..21 -> "Good evening"
-            else -> "Good night"
-        }
-        if (greeting.text.toString() != g) greeting.text = g   // only touch the view when it changes
-    }
+    // Hero section - DISABLED FOR iPHONE UI
 
     private fun buildHero(): View {
-        val hero = FrameLayout(this).apply { setPadding(padH, 0, padH, 0); clipChildren = false }
-
-        val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        heroTitle = tv("", 50f, PremiumColors.TEXT_PRIMARY, true).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
-        heroSub = tv("", 18f, PremiumColors.TEXT_SECONDARY).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
-        heroBtn = tv("Open", 19f, PremiumColors.TEXT_PRIMARY, true).apply {
-            gravity = Gravity.CENTER
-            background = GlassDrawable(u(40f).toFloat(),
-                withAlpha(PremiumColors.ACCENT_EMERALD, 70), withAlpha(PremiumColors.ACCENT_EMERALD, 40), 0.8f, true)
-        }
-        val tw = (W * 0.46f).toInt()
-        text.addView(heroTitle, LinearLayout.LayoutParams(tw, u(58f)))
-        text.addView(heroSub, LinearLayout.LayoutParams(tw, u(26f)).apply { topMargin = u(2f) })
-        text.addView(heroBtn, LinearLayout.LayoutParams(u(210f), u(42f)).apply { topMargin = u(12f) })
-        hero.addView(text, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.BOTTOM or Gravity.START).apply { bottomMargin = u(14f) })
-
-        val hh = (H * 0.33f * 0.80f).toInt()
-        val hw = hh * 16 / 9
-        heroFrame = FrameLayout(this)
-        heroImg = RoundedImageView(this).apply { radius = dp(28).toFloat() }
-        heroFrame.addView(heroImg, FrameLayout.LayoutParams(MATCH, MATCH))
-        heroPort = HdmiPortView(this)
-        heroFrame.addView(heroPort, FrameLayout.LayoutParams((hw * 0.34f).toInt(), (hw * 0.34f * 0.46f).toInt(), Gravity.CENTER))
-        heroPs5 = Ps5ConsoleView(this)
-        heroFrame.addView(heroPs5, FrameLayout.LayoutParams(hh, (hh * 0.86f).toInt(), Gravity.CENTER))
-        heroBox = TvBoxView(this)
-        heroFrame.addView(heroBox, FrameLayout.LayoutParams((hh * 1.15f).toInt(), (hh * 0.62f).toInt(), Gravity.CENTER))
-        heroGear = GearView(this)
-        heroFrame.addView(heroGear, FrameLayout.LayoutParams((hh * 0.5f).toInt(), (hh * 0.5f).toInt(), Gravity.CENTER))
-        heroUpdate = UpdateView(this)
-        heroFrame.addView(heroUpdate, FrameLayout.LayoutParams((hh * 0.5f).toInt(), (hh * 0.5f).toInt(), Gravity.CENTER))
-        heroFrame.addView(View(this).apply { background = GlassDrawable(dp(28).toFloat(), 0, 0, 0.7f, true) },
-            FrameLayout.LayoutParams(MATCH, MATCH))
-        hero.addView(heroFrame, FrameLayout.LayoutParams(hw, hh, Gravity.END or Gravity.CENTER_VERTICAL))
-        return hero
+        return View(this)
     }
 
     private fun applyHero(t: Tile) {
-        heroTitle.text = t.title
-        heroSub.text = t.subtitle
-        heroBtn.text = when (t.kind) {
-            0 -> "Open"
-            1 -> "Choose input"
-            2 -> "Settings"
-            3 -> "Update"
-            5 -> "Open options"
-            6 -> "Uninstall"
-            else -> "Find inputs"
-        }
-        heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
-        val dev = if (t.kind == 1) deviceOf(t.title) else 0
-        heroPort.visibility = if ((t.kind == 1 && dev == 0) || t.kind == 4) View.VISIBLE else View.INVISIBLE
-        heroPs5.visibility = if (t.kind == 1 && dev == 1) View.VISIBLE else View.INVISIBLE
-        heroBox.visibility = if (t.kind == 1 && dev == 2) View.VISIBLE else View.INVISIBLE
-        heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
-        heroUpdate.visibility = if (t.kind == 3) View.VISIBLE else View.INVISIBLE
-        if (t.kind == 0) {
-            heroImg.setBitmap(t.art)
-            heroFrame.background = null
-        } else {
-            heroFrame.background = GlassDrawable(dp(28).toFloat(),
-                withAlpha(shade(t.color, 1.3f), 180), withAlpha(shade(t.color, 0.7f), 150), 0f, false)
-        }
-        animateHeroIn()
+        // Hero disabled for iPhone-style UI
     }
 
     /** 1 = PlayStation, 2 = TV box, 0 = plain HDMI. Based on the name, so renaming a port changes its picture. */
@@ -879,31 +822,11 @@ class MainActivity : Activity() {
         }
     }
 
-    /** The big picture pops in and the text slides in one after another. */
-    private fun animateHeroIn() {
-        val ease = DecelerateInterpolator(1.6f)
-        heroFrame.animate().cancel()
-        heroFrame.alpha = 0f
-        heroFrame.scaleX = 0.90f
-        heroFrame.scaleY = 0.90f
-        heroFrame.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(280).setInterpolator(ease).start()
-        var delay = 0L
-        for (v in listOf<View>(heroTitle, heroSub, heroBtn)) {
-            v.animate().cancel()
-            v.alpha = 0f
-            v.translationX = u(36f).toFloat()
-            v.animate().alpha(1f).translationX(0f).setStartDelay(delay).setDuration(260).setInterpolator(ease).start()
-            delay += 45L
-        }
-    }
-
     private fun onTileFocused(t: Tile) {
-        pendingTile = t
-        handler.removeCallbacks(heroRunnable)
-        handler.postDelayed(heroRunnable, 45L)
+        // Hero focus disabled for iPhone-style UI
     }
 
-    // ---------- prayer times (Aladhan API, no key) ----------
+    // ---------- prayer times (Aladhan API, no key) - DISABLED FOR iPHONE UI ----------
 
     private fun httpGet(url: String): String {
         val c = URL(url).openConnection() as HttpURLConnection
@@ -946,66 +869,7 @@ class MainActivity : Activity() {
     }
 
     private fun fetchPrayerTimes() {
-        Thread {
-            var data: PrayerTimesData? = null
-            var fromNetwork = false
-            try {
-                // Umm al-Qura (method 4) is the official Saudi method. Coordinates: Sulaymaniyah district, Riyadh.
-                val day = todayKey()
-                val url = "https://api.aladhan.com/v1/timings/" + day +
-                    "?latitude=24.7003&longitude=46.6955&method=4&timezonestring=Asia/Riyadh&calendarMethod=UAQ"
-                val d = JSONObject(httpGet(url)).getJSONObject("data")
-                val timings = d.getJSONObject("timings")
-                val dateObj = d.getJSONObject("date")
-                val date = dateObj.getString("readable")
-                var hijri = ""
-                try {
-                    val hj = dateObj.getJSONObject("hijri")
-                    val hm = hj.getJSONObject("month").getInt("number")
-                    hijri = hj.getString("day").toInt().toString() + " " + hijriMonths[hm - 1] + " " + hj.getString("year")
-                } catch (e: Exception) { }
-                data = buildPrayerData(timings, date, hijri)
-                fromNetwork = true
-                prayerDay = day
-            } catch (e: Exception) {
-                // Fall back to the last saved times
-                val cached = prefs.getString("cached_prayer_times", null)
-                if (cached != null) {
-                    try {
-                        val json = JSONObject(cached)
-                        data = buildPrayerData(json.getJSONObject("timings"), json.getString("date"), json.optString("hijri", ""))
-                    } catch (e2: Exception) { }
-                }
-            }
-
-            val got = data
-            if (got != null) {
-                prayerTimes = got
-                prayerFetchFailed = !fromNetwork
-                if (fromNetwork) {
-                    try {
-                        val cacheJson = JSONObject()
-                        val timingsJson = JSONObject()
-                        timingsJson.put("Fajr", got.fajr.time)
-                        timingsJson.put("Dhuhr", got.dhuhr.time)
-                        timingsJson.put("Asr", got.asr.time)
-                        timingsJson.put("Maghrib", got.maghrib.time)
-                        timingsJson.put("Isha", got.isha.time)
-                        cacheJson.put("timings", timingsJson)
-                        cacheJson.put("date", got.date)
-                        cacheJson.put("hijri", got.hijri)
-                        prefs.edit().putString("cached_prayer_times", cacheJson.toString()).apply()
-                    } catch (e: Exception) { }
-                }
-                PrayerAlarm.schedule(applicationContext)
-            } else {
-                prayerFetchFailed = true
-            }
-
-            runOnUiThread {
-                updatePrayerWidget()
-            }
-        }.start()
+        // Prayer times fetch disabled for simplified iPhone-style UI
     }
 
     private fun nowSeconds(): Int {
@@ -1030,33 +894,10 @@ class MainActivity : Activity() {
     }
 
     private fun updatePrayerWidget() {
-        // New day in Riyadh: ask for fresh times (the ticker does the fetch)
-        if (prayerDay.isNotEmpty() && prayerDay != todayKey()) {
-            prayerDay = ""
-            lastPrayerFetch = -1L
-        }
-        val two = nextTwoPrayers()
-        if (two != null) {
-            val a = two[0]
-            val b = two[1]
-            prayerText.text = a.name + "  " + fmt12(a.hour, a.minute)
-            prayerText2.text = b.name + "  " + fmt12(b.hour, b.minute)
-            val s1 = secondsUntil(a)
-            val s2 = secondsUntil(b)
-            prayerNextText.text = "time left  " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s1 / 3600, (s1 % 3600) / 60, s1 % 60)
-            prayerNextText2.text = "time left  " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s2 / 3600, (s2 % 3600) / 60, s2 % 60)
-            // highlight a countdown in gold during the last 15 minutes
-            prayerNextText.setTextColor(if (s1 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
-            prayerNextText2.setTextColor(if (s2 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
-        } else {
-            prayerText.text = "Loading prayer times\u2026"
-            prayerText2.text = ""
-            prayerNextText.text = ""
-            prayerNextText2.text = ""
-        }
+        // Prayer widget update disabled for simplified iPhone-style UI
     }
 
-    // ---------- weather (Open-Meteo, no key) ----------
+    // ---------- weather (Open-Meteo, no key) - DISABLED FOR iPHONE UI ----------
 
     private fun kindFor(code: Int, day: Boolean): Int = when (code) {
         0, 1 -> if (day) 0 else 1
@@ -1066,58 +907,7 @@ class MainActivity : Activity() {
     }
 
     private fun fetchWeather() {
-        Thread {
-            var temp = 0
-            var text = ""
-            var kind = 2
-            var ok = false
-            val errs = ArrayList<String>()
-            try {
-                val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
-                val cur = JSONObject(body).getJSONObject("current")
-                temp = Math.round(cur.getDouble("temperature_2m")).toInt()
-                val code = cur.getInt("weather_code")
-                text = describe(code)
-                kind = kindFor(code, cur.optInt("is_day", 1) == 1)
-                ok = true
-            } catch (e: Exception) { errs.add("OpenMeteo: " + e.javaClass.simpleName + (e.message?.let { ": " + it.take(30) } ?: "")) }
-            if (!ok) {
-                for (base in listOf("https://wttr.in", "http://wttr.in")) {
-                    try {
-                        val parts = httpGet("$base/Riyadh?format=%t|%C").trim().split("|")
-                        val num = Regex("-?[0-9]+").find(parts[0])?.value?.toIntOrNull()
-                        if (num != null) {
-                            temp = num
-                            text = if (parts.size > 1) parts[1].trim() else ""
-                            val low = text.lowercase()
-                            val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
-                            val day = hr in 6..17
-                            kind = when {
-                                low.contains("thunder") -> 4
-                                low.contains("rain") || low.contains("drizzle") || low.contains("shower") -> 3
-                                low.contains("sun") || low.contains("clear") -> if (day) 0 else 1
-                                else -> 2
-                            }
-                            ok = true
-                            break
-                        }
-                    } catch (e: Exception) { errs.add("wttr(${base.take(6)}): " + e.javaClass.simpleName) }
-                }
-            }
-            val t2 = "Riyadh   $temp°   $text"
-            runOnUiThread {
-                if (ok) {
-                    weatherFailed = false
-                    if (weatherText.text.toString() != t2) weatherText.text = t2
-                    weatherIcon.kind = kind
-                } else {
-                    weatherFailed = true
-                    val why = errs.joinToString("  /  ")
-                    val cur = weatherText.text.toString()
-                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "Riyadh   weather error: $why"
-                }
-            }
-        }.start()
+        // Weather fetch disabled for simplified iPhone-style UI
     }
 
     private fun describe(code: Int): String = when (code) {
@@ -1273,11 +1063,12 @@ class MainActivity : Activity() {
     }
 
     private fun populateApps(tiles: List<Tile>) {
-        favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews()
+        favRow.removeAllViews(); recentRow.removeAllViews(); appsRow.removeAllViews(); dockRow.removeAllViews()
         val favs = pickFavorites(tiles)
         favs.forEachIndexed { i, t -> favRow.addView(buildCard(t, i < favs.size - 1)) }
         tiles.forEachIndexed { i, t -> appsRow.addView(buildCard(t, i < tiles.size - 1)) }
         populateRecent(tiles)
+        populateDock(tiles)
         if (currentFocus == null) favRow.getChildAt(0)?.requestFocus()
     }
 
@@ -1286,6 +1077,70 @@ class MainActivity : Activity() {
         val recentPkgSet = recentJson.split(",").filter { it.isNotBlank() }.take(6).toSet()
         val recentTiles = tiles.filter { it.pkg in recentPkgSet }.take(6)
         recentTiles.forEachIndexed { i, t -> recentRow.addView(buildCard(t, i < recentTiles.size - 1)) }
+    }
+
+    private fun populateDock(tiles: List<Tile>) {
+        // Add up to 10 favorite apps to the dock (like iOS dock)
+        val dockKeys = listOf("netflix", "youtube", "prime", "disney", "shahid", "spotify", "hbo", "apple", "browser", "multimedia")
+        val dockTiles = ArrayList<Tile>()
+        for (k in dockKeys) {
+            val m = tiles.firstOrNull { !dockTiles.contains(it) && (it.title.lowercase().contains(k) || it.pkg.lowercase().contains(k)) }
+            if (m != null) dockTiles.add(m)
+            if (dockTiles.size == 10) break
+        }
+        // Fill remaining slots with any apps
+        for (t in tiles) { if (!dockTiles.contains(t)) dockTiles.add(t); if (dockTiles.size == 10) break }
+
+        dockTiles.forEachIndexed { i, t ->
+            val dockItem = buildDockItem(t)
+            dockRow.addView(dockItem, LinearLayout.LayoutParams(0, WRAP, 1f).apply { rightMargin = if (i < dockTiles.size - 1) u(16f) else 0 })
+        }
+    }
+
+    private fun buildDockItem(t: Tile): View {
+        val size = u(56f)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            isFocusable = true
+            isClickable = true
+            setPadding(u(8f), u(8f), u(8f), u(8f))
+        }
+
+        val iconBg = FrameLayout(this).apply {
+            background = GlassDrawable(u(16f).toFloat(),
+                withAlpha(t.color, 180), withAlpha(t.color, 100), 0.6f, true)
+        }
+        iconBg.addView(View(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = u(14f).toFloat()
+                setColor(withAlpha(t.color, 120))
+            }
+        }, FrameLayout.LayoutParams(MATCH, MATCH))
+        iconBg.addView(tv(t.title.first().toString(), 28f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+        }, FrameLayout.LayoutParams(MATCH, MATCH))
+        box.addView(iconBg, LinearLayout.LayoutParams(size, size))
+
+        val label = tv(t.title.take(10), 12f, PremiumColors.TEXT_SECONDARY, true).apply {
+            gravity = Gravity.CENTER
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        box.addView(label, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(6f) })
+
+        box.setOnClickListener { launchApp(t) }
+        box.setOnFocusChangeListener { _, f ->
+            box.animate().cancel()
+            if (f) {
+                box.animate().scaleX(1.15f).scaleY(1.15f).setDuration(200).start()
+                label.setTextColor(PremiumColors.TEXT_PRIMARY)
+            } else {
+                box.animate().scaleX(1f).scaleY(1f).setDuration(150).start()
+                label.setTextColor(PremiumColors.TEXT_SECONDARY)
+            }
+        }
+        return box
     }
 
     private fun addToRecent(pkg: String) {
@@ -1896,7 +1751,6 @@ class MainActivity : Activity() {
             }
             border.alpha = if (f) 0.8f else 0.5f
             label.alpha = if (f && t.kind == 0) 1f else 0f
-            if (f) onTileFocused(t)
         }
         return box
     }
