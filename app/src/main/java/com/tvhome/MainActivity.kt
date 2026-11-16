@@ -494,7 +494,8 @@ class MainActivity : Activity() {
         val asr: PrayerTime,
         val maghrib: PrayerTime,
         val isha: PrayerTime,
-        val date: String
+        val date: String,
+        val hijri: String = ""
     )
 
     private val handler = Handler(Looper.getMainLooper())
@@ -516,6 +517,8 @@ class MainActivity : Activity() {
     private lateinit var heroFrame: FrameLayout
     private lateinit var heroImg: RoundedImageView
     private lateinit var heroPort: HdmiPortView
+    private lateinit var heroPs5: Ps5ConsoleView
+    private lateinit var heroBox: TvBoxView
     private lateinit var heroGear: GearView
     private lateinit var weatherText: TextView
     private lateinit var greeting: TextView
@@ -689,6 +692,7 @@ class MainActivity : Activity() {
             lastPrayerFetch = SystemClock.elapsedRealtime()
             fetchPrayerTimes()
         }
+        PrayerAlarm.schedule(applicationContext)
         handler.post(ticker)
     }
 
@@ -772,7 +776,8 @@ class MainActivity : Activity() {
     private fun updateClock() {
         val t = clockFmt.format(java.util.Date())   // always 12-hour, always current
         if (clockText.text.toString() != t) clockText.text = t
-        val d = dateFmt.format(java.util.Date())   // day + date
+        val hj = prayerTimes?.hijri.orEmpty()
+        val d = dateFmt.format(java.util.Date()) + (if (hj.isNotEmpty()) "   \u00B7   " + hj + " AH" else "")   // day + date + Hijri
         if (dateText.text.toString() != d) dateText.text = d
     }
 
@@ -811,6 +816,10 @@ class MainActivity : Activity() {
         heroFrame.addView(heroImg, FrameLayout.LayoutParams(MATCH, MATCH))
         heroPort = HdmiPortView(this)
         heroFrame.addView(heroPort, FrameLayout.LayoutParams((hw * 0.34f).toInt(), (hw * 0.34f * 0.46f).toInt(), Gravity.CENTER))
+        heroPs5 = Ps5ConsoleView(this)
+        heroFrame.addView(heroPs5, FrameLayout.LayoutParams(hh, (hh * 0.86f).toInt(), Gravity.CENTER))
+        heroBox = TvBoxView(this)
+        heroFrame.addView(heroBox, FrameLayout.LayoutParams((hh * 1.15f).toInt(), (hh * 0.62f).toInt(), Gravity.CENTER))
         heroGear = GearView(this)
         heroFrame.addView(heroGear, FrameLayout.LayoutParams((hh * 0.5f).toInt(), (hh * 0.5f).toInt(), Gravity.CENTER))
         heroUpdate = UpdateView(this)
@@ -834,7 +843,10 @@ class MainActivity : Activity() {
             else -> "Find inputs"
         }
         heroImg.visibility = if (t.kind == 0) View.VISIBLE else View.INVISIBLE
-        heroPort.visibility = if (t.kind == 1 || t.kind == 4) View.VISIBLE else View.INVISIBLE
+        val dev = if (t.kind == 1) deviceOf(t.title) else 0
+        heroPort.visibility = if ((t.kind == 1 && dev == 0) || t.kind == 4) View.VISIBLE else View.INVISIBLE
+        heroPs5.visibility = if (t.kind == 1 && dev == 1) View.VISIBLE else View.INVISIBLE
+        heroBox.visibility = if (t.kind == 1 && dev == 2) View.VISIBLE else View.INVISIBLE
         heroGear.visibility = if (t.kind == 2) View.VISIBLE else View.INVISIBLE
         heroUpdate.visibility = if (t.kind == 3) View.VISIBLE else View.INVISIBLE
         if (t.kind == 0) {
@@ -843,6 +855,35 @@ class MainActivity : Activity() {
         } else {
             heroFrame.background = GlassDrawable(dp(28).toFloat(),
                 withAlpha(shade(t.color, 1.3f), 180), withAlpha(shade(t.color, 0.7f), 150), 0f, false)
+        }
+        animateHeroIn()
+    }
+
+    /** 1 = PlayStation, 2 = TV box, 0 = plain HDMI. Based on the name, so renaming a port changes its picture. */
+    private fun deviceOf(title: String): Int {
+        val u = title.uppercase()
+        return when {
+            u.contains("PLAYSTATION") || u.contains("PS5") -> 1
+            u.contains("TV BOX") || u.contains("TVBOX") -> 2
+            else -> 0
+        }
+    }
+
+    /** The big picture pops in and the text slides in one after another. */
+    private fun animateHeroIn() {
+        val ease = DecelerateInterpolator(1.6f)
+        heroFrame.animate().cancel()
+        heroFrame.alpha = 0f
+        heroFrame.scaleX = 0.90f
+        heroFrame.scaleY = 0.90f
+        heroFrame.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(280).setInterpolator(ease).start()
+        var delay = 0L
+        for (v in listOf<View>(heroTitle, heroSub, heroBtn)) {
+            v.animate().cancel()
+            v.alpha = 0f
+            v.translationX = u(36f).toFloat()
+            v.animate().alpha(1f).translationX(0f).setStartDelay(delay).setDuration(260).setInterpolator(ease).start()
+            delay += 45L
         }
     }
 
@@ -864,86 +905,89 @@ class MainActivity : Activity() {
         try { return c.inputStream.bufferedReader().use { it.readText() } } finally { c.disconnect() }
     }
 
+    private val riyadhTz: java.util.TimeZone = java.util.TimeZone.getTimeZone("Asia/Riyadh")
+    private var prayerDay = ""
+
+    private val hijriMonths = arrayOf("Muharram", "Safar", "Rabi al-Awwal", "Rabi al-Thani",
+        "Jumada al-Ula", "Jumada al-Thani", "Rajab", "Shaban", "Ramadan", "Shawwal", "Dhul Qadah", "Dhul Hijjah")
+
+    private fun todayKey(): String {
+        val f = java.text.SimpleDateFormat("dd-MM-yyyy", java.util.Locale.US)
+        f.timeZone = riyadhTz
+        return f.format(java.util.Date())
+    }
+
+    private fun parseHm(s: String): Pair<Int, Int> {
+        val m = Regex("(\\d{1,2}):(\\d{2})").find(s) ?: throw IllegalArgumentException("bad time")
+        return Pair(m.groupValues[1].toInt(), m.groupValues[2].toInt())
+    }
+
+    private fun fmt12(h: Int, m: Int): String {
+        val hh = if (h % 12 == 0) 12 else h % 12
+        return String.format(java.util.Locale.US, "%d:%02d %s", hh, m, if (h < 12) "AM" else "PM")
+    }
+
+    private fun buildPrayerData(timings: JSONObject, date: String, hijri: String): PrayerTimesData {
+        fun one(name: String): PrayerTime {
+            val hm = parseHm(timings.getString(name))
+            return PrayerTime(name, String.format(java.util.Locale.US, "%02d:%02d", hm.first, hm.second), hm.first, hm.second)
+        }
+        return PrayerTimesData(one("Fajr"), one("Dhuhr"), one("Asr"), one("Maghrib"), one("Isha"), date, hijri)
+    }
+
     private fun fetchPrayerTimes() {
         Thread {
-            var ok = false
             var data: PrayerTimesData? = null
+            var fromNetwork = false
             try {
-                // Aladhan API for Riyadh (Sulaymaniyah district)
-                val body = httpGet("https://api.aladhan.com/v1/timingsByCity?city=Riyadh&country=Saudi%20Arabia&method=3")
-                val json = JSONObject(body)
-                val timings = json.getJSONObject("data").getJSONObject("timings")
-                val date = json.getJSONObject("data").getJSONObject("date").getString("readable")
-
-                fun parseTime(timeStr: String): Pair<Int, Int> {
-                    val parts = timeStr.split(":")
-                    return Pair(parts[0].toInt(), parts[1].toInt())
-                }
-
-                val (fajrH, fajrM) = parseTime(timings.getString("Fajr"))
-                val (dhuhrH, dhuhrM) = parseTime(timings.getString("Dhuhr"))
-                val (asrH, asrM) = parseTime(timings.getString("Asr"))
-                val (maghribH, maghribM) = parseTime(timings.getString("Maghrib"))
-                val (ishaH, ishaM) = parseTime(timings.getString("Isha"))
-
-                data = PrayerTimesData(
-                    fajr = PrayerTime("Fajr", timings.getString("Fajr"), fajrH, fajrM),
-                    dhuhr = PrayerTime("Dhuhr", timings.getString("Dhuhr"), dhuhrH, dhuhrM),
-                    asr = PrayerTime("Asr", timings.getString("Asr"), asrH, asrM),
-                    maghrib = PrayerTime("Maghrib", timings.getString("Maghrib"), maghribH, maghribM),
-                    isha = PrayerTime("Isha", timings.getString("Isha"), ishaH, ishaM),
-                    date = date
-                )
-                ok = true
+                // Umm al-Qura (method 4) is the official Saudi method. Coordinates: Sulaymaniyah district, Riyadh.
+                val day = todayKey()
+                val url = "https://api.aladhan.com/v1/timings/" + day +
+                    "?latitude=24.7003&longitude=46.6955&method=4&timezonestring=Asia/Riyadh&calendarMethod=UAQ"
+                val d = JSONObject(httpGet(url)).getJSONObject("data")
+                val timings = d.getJSONObject("timings")
+                val dateObj = d.getJSONObject("date")
+                val date = dateObj.getString("readable")
+                var hijri = ""
+                try {
+                    val hj = dateObj.getJSONObject("hijri")
+                    val hm = hj.getJSONObject("month").getInt("number")
+                    hijri = hj.getString("day").toInt().toString() + " " + hijriMonths[hm - 1] + " " + hj.getString("year")
+                } catch (e: Exception) { }
+                data = buildPrayerData(timings, date, hijri)
+                fromNetwork = true
+                prayerDay = day
             } catch (e: Exception) {
-                // Try cached prayer times as fallback
+                // Fall back to the last saved times
                 val cached = prefs.getString("cached_prayer_times", null)
                 if (cached != null) {
                     try {
                         val json = JSONObject(cached)
-                        val timings = json.getJSONObject("timings")
-                        val date = json.getString("date")
-
-                        fun parseTime(timeStr: String): Pair<Int, Int> {
-                            val parts = timeStr.split(":")
-                            return Pair(parts[0].toInt(), parts[1].toInt())
-                        }
-
-                        val (fajrH, fajrM) = parseTime(timings.getString("Fajr"))
-                        val (dhuhrH, dhuhrM) = parseTime(timings.getString("Dhuhr"))
-                        val (asrH, asrM) = parseTime(timings.getString("Asr"))
-                        val (maghribH, maghribM) = parseTime(timings.getString("Maghrib"))
-                        val (ishaH, ishaM) = parseTime(timings.getString("Isha"))
-
-                        data = PrayerTimesData(
-                            fajr = PrayerTime("Fajr", timings.getString("Fajr"), fajrH, fajrM),
-                            dhuhr = PrayerTime("Dhuhr", timings.getString("Dhuhr"), dhuhrH, dhuhrM),
-                            asr = PrayerTime("Asr", timings.getString("Asr"), asrH, asrM),
-                            maghrib = PrayerTime("Maghrib", timings.getString("Maghrib"), maghribH, maghribM),
-                            isha = PrayerTime("Isha", timings.getString("Isha"), ishaH, ishaM),
-                            date = date
-                        )
-                        ok = true
+                        data = buildPrayerData(json.getJSONObject("timings"), json.getString("date"), json.optString("hijri", ""))
                     } catch (e2: Exception) { }
                 }
             }
 
-            if (ok && data != null) {
-                prayerTimes = data
-                prayerFetchFailed = false
-                // Cache the prayer times
-                try {
-                    val cacheJson = JSONObject()
-                    val timingsJson = JSONObject()
-                    timingsJson.put("Fajr", data.fajr.time)
-                    timingsJson.put("Dhuhr", data.dhuhr.time)
-                    timingsJson.put("Asr", data.asr.time)
-                    timingsJson.put("Maghrib", data.maghrib.time)
-                    timingsJson.put("Isha", data.isha.time)
-                    cacheJson.put("timings", timingsJson)
-                    cacheJson.put("date", data.date)
-                    prefs.edit().putString("cached_prayer_times", cacheJson.toString()).apply()
-                } catch (e: Exception) { }
+            val got = data
+            if (got != null) {
+                prayerTimes = got
+                prayerFetchFailed = !fromNetwork
+                if (fromNetwork) {
+                    try {
+                        val cacheJson = JSONObject()
+                        val timingsJson = JSONObject()
+                        timingsJson.put("Fajr", got.fajr.time)
+                        timingsJson.put("Dhuhr", got.dhuhr.time)
+                        timingsJson.put("Asr", got.asr.time)
+                        timingsJson.put("Maghrib", got.maghrib.time)
+                        timingsJson.put("Isha", got.isha.time)
+                        cacheJson.put("timings", timingsJson)
+                        cacheJson.put("date", got.date)
+                        cacheJson.put("hijri", got.hijri)
+                        prefs.edit().putString("cached_prayer_times", cacheJson.toString()).apply()
+                    } catch (e: Exception) { }
+                }
+                PrayerAlarm.schedule(applicationContext)
             } else {
                 prayerFetchFailed = true
             }
@@ -954,52 +998,44 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun getNextPrayer(): PrayerTime? {
-        val prayers = prayerTimes ?: return null
-        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Riyadh"))
-        val currentHour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        val currentMinute = cal.get(java.util.Calendar.MINUTE)
-        val currentMinutes = currentHour * 60 + currentMinute
-
-        val prayerList = listOf(prayers.fajr, prayers.dhuhr, prayers.asr, prayers.maghrib, prayers.isha)
-        for (prayer in prayerList) {
-            val prayerMinutes = prayer.hour * 60 + prayer.minute
-            if (prayerMinutes > currentMinutes) {
-                return prayer
-            }
-        }
-        // If no next prayer today, return Fajr tomorrow
-        return prayers.fajr
+    private fun nowSeconds(): Int {
+        val c = java.util.Calendar.getInstance(riyadhTz)
+        return c.get(java.util.Calendar.HOUR_OF_DAY) * 3600 + c.get(java.util.Calendar.MINUTE) * 60 + c.get(java.util.Calendar.SECOND)
     }
 
-    private fun getTimeUntilNextPrayer(): String {
-        val nextPrayer = getNextPrayer() ?: return "--:--:--"
-        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Riyadh"))
-        val currentHour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        val currentMinute = cal.get(java.util.Calendar.MINUTE)
-        val currentSecond = cal.get(java.util.Calendar.SECOND)
-        val currentSeconds = currentHour * 3600 + currentMinute * 60 + currentSecond
+    /** The next prayer and the one after it (wraps past Isha to tomorrow's Fajr). */
+    private fun nextTwoPrayers(): List<PrayerTime>? {
+        val p = prayerTimes ?: return null
+        val list = listOf(p.fajr, p.dhuhr, p.asr, p.maghrib, p.isha)
+        val now = nowSeconds()
+        var i = list.indexOfFirst { it.hour * 3600 + it.minute * 60 > now }
+        if (i < 0) i = 0
+        return listOf(list[i], list[(i + 1) % list.size])
+    }
 
-        var prayerSeconds = nextPrayer.hour * 3600 + nextPrayer.minute * 60
-        if (prayerSeconds <= currentSeconds) {
-            // Prayer is tomorrow
-            prayerSeconds += 24 * 3600
-        }
-
-        val diff = prayerSeconds - currentSeconds
-        val hours = diff / 3600
-        val minutes = (diff % 3600) / 60
-        val seconds = diff % 60
-        return String.format("%02d:%02d:%02d", hours, minutes, seconds)
+    private fun secondsUntil(pt: PrayerTime): Int {
+        var diff = pt.hour * 3600 + pt.minute * 60 - nowSeconds()
+        if (diff <= 0) diff += 24 * 3600
+        return diff
     }
 
     private fun updatePrayerWidget() {
-        val nextPrayer = getNextPrayer()
-        if (nextPrayer != null) {
-            prayerText.text = "Next: ${nextPrayer.name} ${nextPrayer.time}"
-            prayerNextText.text = getTimeUntilNextPrayer()
+        // New day in Riyadh: ask for fresh times (the ticker does the fetch)
+        if (prayerDay.isNotEmpty() && prayerDay != todayKey()) {
+            prayerDay = ""
+            lastPrayerFetch = -1L
+        }
+        val two = nextTwoPrayers()
+        if (two != null) {
+            val a = two[0]
+            val b = two[1]
+            prayerText.text = a.name + " " + fmt12(a.hour, a.minute) + "   \u00B7   " + b.name + " " + fmt12(b.hour, b.minute)
+            val secs = secondsUntil(a)
+            prayerNextText.text = String.format(java.util.Locale.US, "%02d:%02d:%02d", secs / 3600, (secs % 3600) / 60, secs % 60)
+            // highlight the countdown in gold during the last 15 minutes
+            prayerNextText.setTextColor(if (secs < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
         } else {
-            prayerText.text = "Loading prayer times…"
+            prayerText.text = "Loading prayer times\u2026"
             prayerNextText.text = "--:--:--"
         }
     }
@@ -1300,7 +1336,7 @@ class MainActivity : Activity() {
                 else -> 0xFF2C3550.toInt()
             }
             inputsRow.addView(buildCard(
-                Tile(1, name, "HDMI $n   ·   Press OK for the TV's input list, hold OK to rename",
+                Tile(1, name, "HDMI $n   ·   OK: inputs   ·   Hold OK: rename",
                     color, null, id, "", n), true))
         }
         inputsRow.addView(buildCard(Tile(2, "Settings", "System settings", PremiumColors.BACKGROUND_CARD and 0xFFFFFF, null), true))
@@ -1612,6 +1648,7 @@ class MainActivity : Activity() {
         val r = dp(26).toFloat()
         val frame = FrameLayout(this)
         frame.outlineProvider = roundOutline(r)
+        var artView: View? = null
 
         when (t.kind) {
             0 -> {
@@ -1621,8 +1658,9 @@ class MainActivity : Activity() {
                 frame.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
             }
             1 -> {
-                val isPs5 = t.title.contains("PLAYSTATION", ignoreCase = true)
-                val isTvBox = t.title.contains("TV BOX", ignoreCase = true)
+                val dev = deviceOf(t.title)
+                val isPs5 = dev == 1
+                val isTvBox = dev == 2
                 val bgColor = when {
                     isPs5 -> Color.argb(110, 0, 48, 135)
                     isTvBox -> Color.argb(110, 26, 26, 26)
@@ -1636,17 +1674,29 @@ class MainActivity : Activity() {
                 frame.background = GlassDrawable(r, bgColor, bgEnd, 0f, false)
                 val pw = (cardW * 0.40f).toInt()
 
-                // Show PS5 logo for PS5, HDMI port for others
-                if (isPs5) {
-                    frame.addView(Ps5LogoView(this),
-                        FrameLayout.LayoutParams((cardH * 0.45f).toInt(), (cardH * 0.45f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                // Device picture: PS5 console, TV box, or the plain HDMI port
+                when (dev) {
+                    1 -> {
+                        val v = Ps5ConsoleView(this)
+                        artView = v
+                        frame.addView(v, FrameLayout.LayoutParams((cardH * 0.80f).toInt(), (cardH * 0.64f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                            topMargin = (cardH * 0.10f).toInt()
+                        })
+                    }
+                    2 -> {
+                        val v = TvBoxView(this)
+                        artView = v
+                        frame.addView(v, FrameLayout.LayoutParams((cardW * 0.50f).toInt(), (cardH * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
                             topMargin = (cardH * 0.20f).toInt()
                         })
-                } else {
-                    frame.addView(HdmiPortView(this),
-                        FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                    }
+                    else -> {
+                        val v = HdmiPortView(this)
+                        artView = v
+                        frame.addView(v, FrameLayout.LayoutParams(pw, (pw * 0.46f).toInt(), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
                             topMargin = (cardH * 0.26f).toInt()
                         })
+                    }
                 }
 
                 frame.addView(tv(t.title, 15f, PremiumColors.TEXT_PRIMARY, true).apply {
@@ -1751,6 +1801,18 @@ class MainActivity : Activity() {
         }
         frame.addView(border, FrameLayout.LayoutParams(MATCH, MATCH))
 
+        // bright focus ring: a soft glowing halo plus a crisp white line
+        val ringGlow = View(this).apply {
+            background = GradientDrawable().apply { cornerRadius = r; setStroke(dp(9), 0x66FFFFFF) }
+            alpha = 0f
+        }
+        val ringLine = View(this).apply {
+            background = GradientDrawable().apply { cornerRadius = r; setStroke(dp(3), Color.WHITE) }
+            alpha = 0f
+        }
+        frame.addView(ringGlow, FrameLayout.LayoutParams(MATCH, MATCH))
+        frame.addView(ringLine, FrameLayout.LayoutParams(MATCH, MATCH))
+
         val label = tv(t.title, 16f, PremiumColors.TEXT_PRIMARY, true).apply {
             gravity = Gravity.CENTER; maxLines = 1; ellipsize = TextUtils.TruncateAt.END
             alpha = 0f; setPadding(0, u(12f), 0, 0)
@@ -1787,11 +1849,35 @@ class MainActivity : Activity() {
             box.isLongClickable = true
             box.setOnLongClickListener { confirmUninstall(t); true }
         }
-        // Smooth focus effect: scale + brightness + shadow on the focused card only
+        // Focus animation: springy pop, bright ring with a gentle breathing glow, picture bounce
+        val pop = android.view.animation.OvershootInterpolator(1.5f)
+        val bounce = android.view.animation.OvershootInterpolator(2.4f)
+        var breathe: android.animation.ObjectAnimator? = null
+        box.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) { }
+            override fun onViewDetachedFromWindow(v: View) { breathe?.cancel() }
+        })
         box.setOnFocusChangeListener { v, f ->
-            val s = if (f) 1.08f else 1f
-            v.animate().scaleX(s).scaleY(s).alpha(if (f) 1f else 0.78f)
-                .setDuration(120).setInterpolator(DecelerateInterpolator()).start()
+            v.animate().cancel()
+            breathe?.cancel()
+            breathe = null
+            ringGlow.animate().cancel()
+            if (f) {
+                v.animate().scaleX(1.10f).scaleY(1.10f).alpha(1f).setDuration(300).setInterpolator(pop).start()
+                artView?.animate()?.scaleX(1.12f)?.scaleY(1.12f)?.setDuration(340)?.setInterpolator(bounce)?.start()
+                ringLine.animate().alpha(1f).setDuration(150).start()
+                val anim = android.animation.ObjectAnimator.ofFloat(ringGlow, View.ALPHA, 0.25f, 1f)
+                anim.setDuration(850L)
+                anim.repeatMode = android.animation.ValueAnimator.REVERSE
+                anim.repeatCount = android.animation.ValueAnimator.INFINITE
+                anim.start()
+                breathe = anim
+            } else {
+                v.animate().scaleX(1f).scaleY(1f).alpha(0.78f).setDuration(180).setInterpolator(DecelerateInterpolator()).start()
+                artView?.animate()?.scaleX(1f)?.scaleY(1f)?.setDuration(180)?.setInterpolator(DecelerateInterpolator())?.start()
+                ringLine.animate().alpha(0f).setDuration(120).start()
+                ringGlow.animate().alpha(0f).setDuration(120).start()
+            }
             border.alpha = if (f) 0.8f else 0.5f
             label.alpha = if (f && t.kind == 0) 1f else 0f
             if (f) onTileFocused(t)

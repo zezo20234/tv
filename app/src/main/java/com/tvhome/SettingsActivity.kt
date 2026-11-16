@@ -85,6 +85,7 @@ class SettingsActivity : Activity() {
         // Prayer times section
         content.addView(sectionHeader("Prayer Times"))
         content.addView(buildPrayerInfoRow())
+        content.addView(buildChimeRow(), LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = u(10f) })
         content.addView(buildSeparator())
 
         // Launcher settings section
@@ -207,6 +208,53 @@ class SettingsActivity : Activity() {
         return row
     }
 
+    private fun to12(s: String): String {
+        val m = Regex("(\\d{1,2}):(\\d{2})").find(s) ?: return s
+        val h = m.groupValues[1].toInt()
+        val hh = if (h % 12 == 0) 12 else h % 12
+        return hh.toString() + ":" + m.groupValues[2] + (if (h < 12) " AM" else " PM")
+    }
+
+    private fun buildChimeRow(): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(u(16f), u(16f), u(16f), u(16f))
+            background = rowBackground()
+            isFocusable = true
+            isClickable = true
+            setOnFocusChangeListener { _, f -> updateRowBackground(this, f) }
+        }
+        val icon = TextView(this).apply {
+            text = "\uD83D\uDD14"
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, u(28f).toFloat())
+            setPadding(u(20f), u(12f), u(20f), u(12f))
+        }
+        row.addView(icon)
+        val textCol = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        textCol.addView(tv("Prayer chime", 18f, PremiumColors.TEXT_PRIMARY, true))
+        textCol.addView(tv("A soft, low chime when it is time to pray", 14f, PremiumColors.TEXT_TERTIARY).apply {
+            setPadding(0, u(4f), 0, 0)
+        })
+        row.addView(textCol, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val state = tv("", 18f, PremiumColors.ACCENT_EMERALD, true)
+        row.addView(state)
+        fun refresh() {
+            val on = prefs.getBoolean("chime_on", true)
+            state.text = if (on) "ON" else "OFF"
+            state.setTextColor(if (on) PremiumColors.ACCENT_EMERALD else PremiumColors.TEXT_TERTIARY)
+        }
+        refresh()
+        row.setOnClickListener {
+            val on = !prefs.getBoolean("chime_on", true)
+            prefs.edit().putBoolean("chime_on", on).apply()
+            if (on) SoftChime.play()
+            PrayerAlarm.schedule(applicationContext)
+            refresh()
+        }
+        return row
+    }
+
     private fun rowBackground(): GradientDrawable = GradientDrawable().apply {
         cornerRadius = u(16f).toFloat()
         setColor(PremiumColors.BACKGROUND_CARD)
@@ -297,7 +345,7 @@ class SettingsActivity : Activity() {
             }
         }
         panel.addView(tv("Prayer Times - Riyadh", 24f, PremiumColors.TEXT_PRIMARY, true))
-        panel.addView(tv("Sulaymaniyah District, Saudi Arabia", 14f, PremiumColors.TEXT_SECONDARY).apply {
+        panel.addView(tv("Sulaymaniyah District \u00B7 Umm al-Qura", 14f, PremiumColors.TEXT_SECONDARY).apply {
             setPadding(0, u(6f), 0, u(20f))
         })
 
@@ -318,7 +366,8 @@ class SettingsActivity : Activity() {
                 val timings = json.getJSONObject("timings")
                 val date = json.getString("date")
 
-                prayerRow.addView(tv(date, 14f, PremiumColors.TEXT_SECONDARY).apply {
+                val hj = json.optString("hijri", "")
+                prayerRow.addView(tv(if (hj.isNotEmpty()) date + "   \u00B7   " + hj + " AH" else date, 14f, PremiumColors.TEXT_SECONDARY).apply {
                     setPadding(0, 0, 0, u(12f))
                 })
 
@@ -330,7 +379,7 @@ class SettingsActivity : Activity() {
                         setPadding(0, u(8f), 0, u(8f))
                     }
                     pRow.addView(tv(prayer, 16f, PremiumColors.TEXT_PRIMARY, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-                    pRow.addView(tv(timings.getString(prayer), 16f, PremiumColors.ACCENT_EMERALD, true))
+                    pRow.addView(tv(to12(timings.getString(prayer)), 16f, PremiumColors.ACCENT_EMERALD, true))
                     prayerRow.addView(pRow)
                 }
             } catch (e: Exception) {
