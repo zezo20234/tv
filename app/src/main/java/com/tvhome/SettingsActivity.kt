@@ -366,8 +366,7 @@ class SettingsActivity : Activity() {
                 val timings = json.getJSONObject("timings")
                 val date = json.getString("date")
 
-                val hj = json.optString("hijri", "")
-                prayerRow.addView(tv(if (hj.isNotEmpty()) date + "   \u00B7   " + hj + " AH" else date, 14f, PremiumColors.TEXT_SECONDARY).apply {
+                prayerRow.addView(tv(date, 14f, PremiumColors.TEXT_SECONDARY).apply {
                     setPadding(0, 0, 0, u(12f))
                 })
 

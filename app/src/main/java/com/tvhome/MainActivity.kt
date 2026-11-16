@@ -555,6 +555,8 @@ class MainActivity : Activity() {
     private var prayerFetchFailed = false
     private lateinit var prayerText: TextView
     private lateinit var prayerNextText: TextView
+    private lateinit var prayerText2: TextView
+    private lateinit var prayerNextText2: TextView
 
     private val installReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -740,15 +742,24 @@ class MainActivity : Activity() {
 
         // Prayer times row
         val prayerRow = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(u(14f), u(6f), u(20f), u(6f))
-            background = GlassDrawable(u(36f).toFloat(),
+            orientation = LinearLayout.VERTICAL
+            setPadding(u(18f), u(8f), u(22f), u(8f))
+            background = GlassDrawable(u(30f).toFloat(),
                 withAlpha(PremiumColors.ACCENT_EMERALD, 35), withAlpha(PremiumColors.ACCENT_EMERALD, 18), 0.6f, true)
         }
-        prayerText = tv("Loading prayer times…", 16f, PremiumColors.TEXT_PRIMARY, true)
-        prayerRow.addView(prayerText)
-        prayerNextText = tv("--:--:--", 14f, PremiumColors.ACCENT_EMERALD, true)
-        prayerRow.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
+        // first prayer on top, second prayer below, each with its own "time left"
+        val line1 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        prayerText = tv("Loading prayer times\u2026", 16f, PremiumColors.TEXT_PRIMARY, true).apply { minWidth = u(210f) }
+        line1.addView(prayerText)
+        prayerNextText = tv("", 14f, PremiumColors.ACCENT_EMERALD, true)
+        line1.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
+        prayerRow.addView(line1)
+        val line2 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        prayerText2 = tv("", 16f, PremiumColors.TEXT_PRIMARY, true).apply { minWidth = u(210f) }
+        line2.addView(prayerText2)
+        prayerNextText2 = tv("", 14f, PremiumColors.ACCENT_EMERALD, true)
+        line2.addView(prayerNextText2, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
+        prayerRow.addView(line2, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
         left.addView(prayerRow, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
 
         bar.addView(left, LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -776,8 +787,7 @@ class MainActivity : Activity() {
     private fun updateClock() {
         val t = clockFmt.format(java.util.Date())   // always 12-hour, always current
         if (clockText.text.toString() != t) clockText.text = t
-        val hj = prayerTimes?.hijri.orEmpty()
-        val d = dateFmt.format(java.util.Date()) + (if (hj.isNotEmpty()) "   \u00B7   " + hj + " AH" else "")   // day + date + Hijri
+        val d = dateFmt.format(java.util.Date())   // day + date
         if (dateText.text.toString() != d) dateText.text = d
     }
 
@@ -1029,14 +1039,20 @@ class MainActivity : Activity() {
         if (two != null) {
             val a = two[0]
             val b = two[1]
-            prayerText.text = a.name + " " + fmt12(a.hour, a.minute) + "   \u00B7   " + b.name + " " + fmt12(b.hour, b.minute)
-            val secs = secondsUntil(a)
-            prayerNextText.text = String.format(java.util.Locale.US, "%02d:%02d:%02d", secs / 3600, (secs % 3600) / 60, secs % 60)
-            // highlight the countdown in gold during the last 15 minutes
-            prayerNextText.setTextColor(if (secs < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
+            prayerText.text = a.name + "  " + fmt12(a.hour, a.minute)
+            prayerText2.text = b.name + "  " + fmt12(b.hour, b.minute)
+            val s1 = secondsUntil(a)
+            val s2 = secondsUntil(b)
+            prayerNextText.text = "time left  " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s1 / 3600, (s1 % 3600) / 60, s1 % 60)
+            prayerNextText2.text = "time left  " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s2 / 3600, (s2 % 3600) / 60, s2 % 60)
+            // highlight a countdown in gold during the last 15 minutes
+            prayerNextText.setTextColor(if (s1 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
+            prayerNextText2.setTextColor(if (s2 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
         } else {
             prayerText.text = "Loading prayer times\u2026"
-            prayerNextText.text = "--:--:--"
+            prayerText2.text = ""
+            prayerNextText.text = ""
+            prayerNextText2.text = ""
         }
     }
 
