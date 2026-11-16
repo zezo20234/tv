@@ -539,8 +539,6 @@ class MainActivity : Activity() {
     private var prayerFetchFailed = false
     private lateinit var prayerText: TextView
     private lateinit var prayerNextText: TextView
-    private lateinit var prayerText2: TextView
-    private lateinit var prayerNextText2: TextView
     private var prayerDay = ""
 
     // Prayer times data
@@ -659,27 +657,6 @@ class MainActivity : Activity() {
         favRow = row(); inputsRow = row(); appsRow = row()
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
 
-        // Prayer times widget
-        val prayerWidget = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(padH, u(20f), padH, u(20f))
-            background = GlassDrawable(u(30f).toFloat(),
-                withAlpha(PremiumColors.ACCENT_EMERALD, 35), withAlpha(PremiumColors.ACCENT_EMERALD, 18), 0.6f, true)
-        }
-        val line1 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        prayerText = tv("Loading prayer times\u2026", 18f, PremiumColors.TEXT_PRIMARY, true).apply { minWidth = u(210f) }
-        line1.addView(prayerText)
-        prayerNextText = tv("", 16f, PremiumColors.ACCENT_EMERALD, true)
-        line1.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
-        prayerWidget.addView(line1)
-        val line2 = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        prayerText2 = tv("", 18f, PremiumColors.TEXT_PRIMARY, true).apply { minWidth = u(210f) }
-        line2.addView(prayerText2)
-        prayerNextText2 = tv("", 16f, PremiumColors.ACCENT_EMERALD, true)
-        line2.addView(prayerNextText2, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
-        prayerWidget.addView(line2, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
-        content.addView(prayerWidget, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = u(20f) })
-
         content.addView(header("Recent")); content.addView(shelf(favRow))
 
         content.addView(header("Inputs")); content.addView(shelf(inputsRow))
@@ -751,17 +728,34 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
         }
-        clockText = tv("", 110f, PremiumColors.TEXT_PRIMARY, true).apply {
+        clockText = tv("", 140f, Color.argb(230, 255, 255, 255), true).apply {
             gravity = Gravity.CENTER
-            letterSpacing = 0.1f
-            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
+            letterSpacing = 0.02f
+            typeface = Typeface.create("sans-serif-thin", Typeface.NORMAL)
+            setShadowLayer(u(4f).toFloat(), 0f, u(2f).toFloat(), Color.argb(100, 0, 0, 0))
         }
-        dateText = tv("", 20f, PremiumColors.TEXT_SECONDARY, false).apply {
+        dateText = tv("", 22f, Color.argb(200, 255, 255, 255), false).apply {
             gravity = Gravity.CENTER
-            letterSpacing = 0.05f
+            letterSpacing = 0.08f
+            typeface = Typeface.create("sans-serif-light", Typeface.NORMAL)
         }
         centerCol.addView(clockText)
         centerCol.addView(dateText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
+
+        // Prayer times pill (always visible like clock)
+        val prayerPill = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(u(20f), u(10f), u(20f), u(10f))
+            background = GlassDrawable(u(20f).toFloat(),
+                withAlpha(PremiumColors.ACCENT_EMERALD, 30), withAlpha(PremiumColors.ACCENT_EMERALD, 15), 0.5f, true)
+        }
+        prayerText = tv("Loading prayer times\u2026", 16f, PremiumColors.TEXT_PRIMARY, true)
+        prayerPill.addView(prayerText)
+        prayerNextText = tv("", 14f, PremiumColors.ACCENT_EMERALD, true)
+        prayerPill.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = u(12f) })
+        centerCol.addView(prayerPill, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(12f) })
+
         bar.addView(centerCol, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER or Gravity.TOP))
 
         // Right side: Temperature + weather + wifi
@@ -952,20 +946,13 @@ class MainActivity : Activity() {
         val two = nextTwoPrayers()
         if (two != null) {
             val a = two[0]
-            val b = two[1]
             prayerText.text = a.name + "  " + fmt12(a.hour, a.minute)
-            prayerText2.text = b.name + "  " + fmt12(b.hour, b.minute)
             val s1 = secondsUntil(a)
-            val s2 = secondsUntil(b)
-            prayerNextText.text = "time left  " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s1 / 3600, (s1 % 3600) / 60, s1 % 60)
-            prayerNextText2.text = "time left  " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s2 / 3600, (s2 % 3600) / 60, s2 % 60)
+            prayerNextText.text = "in " + String.format(java.util.Locale.US, "%02d:%02d:%02d", s1 / 3600, (s1 % 3600) / 60, s1 % 60)
             prayerNextText.setTextColor(if (s1 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
-            prayerNextText2.setTextColor(if (s2 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
         } else {
             prayerText.text = "Loading prayer times\u2026"
-            prayerText2.text = ""
             prayerNextText.text = ""
-            prayerNextText2.text = ""
         }
     }
 

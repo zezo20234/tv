@@ -6,11 +6,11 @@ android {
     namespace = "com.tvhome"
     compileSdk = 34
     defaultConfig {
-        applicationId = "com.tvhome.app.v18"
+        applicationId = "com.tvhome.app.v20"
         minSdk = 23
         targetSdk = 34
-        versionCode = 18
-        versionName = "v18-1.0"
+        versionCode = 20
+        versionName = "v20-1.0"
     }
     signingConfigs {
         getByName("debug") {
