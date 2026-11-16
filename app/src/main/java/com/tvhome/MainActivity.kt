@@ -222,26 +222,6 @@ class RoundedImageView(ctx: Context) : View(ctx) {
     }
 }
 
-class WifiView(ctx: Context) : View(ctx) {
-    var on: Boolean = true
-        set(v) { if (field != v) { field = v; invalidate() } }
-    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
-    private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val rect = RectF()
-    override fun onDraw(canvas: Canvas) {
-        val w = width.toFloat(); val h = height.toFloat()
-        val color = if (on) Color.WHITE else 0x55FFFFFF
-        p.color = color; dot.color = color; p.strokeWidth = h * 0.085f
-        val cx = w / 2f; val cy = h * 0.92f
-        for (i in 1..3) {
-            val r = h * 0.30f * i
-            rect.set(cx - r, cy - r, cx + r, cy + r)
-            canvas.drawArc(rect, 225f, 90f, false, p)
-        }
-        canvas.drawCircle(cx, cy, h * 0.07f, dot)
-    }
-}
-
 class GearView(ctx: Context) : View(ctx) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFFE6E9F0.toInt() }
     override fun onDraw(canvas: Canvas) {
@@ -513,11 +493,7 @@ class MainActivity : Activity() {
     private lateinit var clockText: TextView
     private lateinit var dateText: TextView
     private lateinit var weatherText: TextView
-    private lateinit var temperatureText: TextView
-    private lateinit var highTempText: TextView
-    private lateinit var lowTempText: TextView
     private lateinit var weatherIcon: WeatherView
-    private lateinit var wifi: WifiView
     private lateinit var prefs: SharedPreferences
     private var tim: TvInputManager? = null
     private var lastSig = ""
@@ -599,11 +575,10 @@ class MainActivity : Activity() {
 
     private val ticker = object : Runnable {
         override fun run() {
-            val online = isOnline()
-            wifi.on = online
             updateClock()
             updatePrayerWidget()
 
+            // Always retry weather every 1 minute if failed, otherwise every 15 minutes
             val weatherInterval = if (weatherFailed) 60_000L else 15 * 60 * 1000L
             if (lastWeather < 0 || SystemClock.elapsedRealtime() - lastWeather > weatherInterval) {
                 lastWeather = SystemClock.elapsedRealtime()
@@ -778,30 +753,19 @@ class MainActivity : Activity() {
         centerCol.addView(dateText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
         bar.addView(centerCol, FrameLayout.LayoutParams(MATCH, WRAP, Gravity.CENTER or Gravity.TOP))
 
-        // Right side: Weather with low/current/high temps
+        // Right side: Weather - Riyadh and current weather only
         val rightSide = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.END
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(u(16f), u(12f), u(20f), u(12f))
             background = capsule()
         }
-        val tempRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        lowTempText = tv("--°", 16f, PremiumColors.TEXT_SECONDARY, true)
-        tempRow.addView(lowTempText)
-        weatherIcon = WeatherView(this)
-        tempRow.addView(weatherIcon, LinearLayout.LayoutParams(u(28f), u(28f)).apply { leftMargin = u(12f); rightMargin = u(12f) })
-        highTempText = tv("--°", 16f, PremiumColors.TEXT_SECONDARY, true)
-        tempRow.addView(highTempText)
-        rightSide.addView(tempRow)
-        weatherText = tv("Loading weather…", 18f, PremiumColors.TEXT_PRIMARY, true).apply {
+        weatherText = tv("Riyadh - Loading weather…", 18f, Color.BLACK, true).apply {
             gravity = Gravity.CENTER
         }
-        rightSide.addView(weatherText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
-        wifi = WifiView(this)
-        rightSide.addView(wifi, LinearLayout.LayoutParams(u(28f), u(23f)).apply { topMargin = u(8f); gravity = Gravity.END })
+        rightSide.addView(weatherText)
+        weatherIcon = WeatherView(this)
+        rightSide.addView(weatherIcon, LinearLayout.LayoutParams(u(28f), u(28f)).apply { leftMargin = u(12f) })
         bar.addView(rightSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.END or Gravity.TOP))
 
         updateClock()
@@ -1019,19 +983,14 @@ class MainActivity : Activity() {
     private fun fetchWeather() {
         Thread {
             var temp = 0
-            var high = 0
-            var low = 0
             var text = ""
             var kind = 2
             var ok = false
             val errs = ArrayList<String>()
             try {
-                val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&daily=temperature_2m_max,temperature_2m_min&timezone=auto")
+                val body = httpGet("https://api.open-meteo.com/v1/forecast?latitude=24.7136&longitude=46.6753&current=temperature_2m,weather_code,is_day&timezone=auto")
                 val cur = JSONObject(body).getJSONObject("current")
-                val daily = JSONObject(body).getJSONObject("daily")
                 temp = Math.round(cur.getDouble("temperature_2m")).toInt()
-                high = Math.round(daily.getJSONArray("temperature_2m_max").getDouble(0)).toInt()
-                low = Math.round(daily.getJSONArray("temperature_2m_min").getDouble(0)).toInt()
                 val code = cur.getInt("weather_code")
                 text = describe(code)
                 kind = kindFor(code, cur.optInt("is_day", 1) == 1)
@@ -1040,13 +999,11 @@ class MainActivity : Activity() {
             if (!ok) {
                 for (base in listOf("https://wttr.in", "http://wttr.in")) {
                     try {
-                        val parts = httpGet("$base/Riyadh?format=%t|%C|%l|%h").trim().split("|")
+                        val parts = httpGet("$base/Riyadh?format=%t|%C").trim().split("|")
                         val num = Regex("-?[0-9]+").find(parts[0])?.value?.toIntOrNull()
                         if (num != null) {
                             temp = num
                             text = if (parts.size > 1) parts[1].trim() else ""
-                            low = if (parts.size > 2) Regex("-?[0-9]+").find(parts[2])?.value?.toIntOrNull() ?: temp else temp
-                            high = if (parts.size > 3) Regex("-?[0-9]+").find(parts[3])?.value?.toIntOrNull() ?: temp else temp
                             val lowTxt = text.lowercase()
                             val hr = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
                             val day = hr in 6..17
@@ -1062,19 +1019,23 @@ class MainActivity : Activity() {
                     } catch (e: Exception) { errs.add("wttr(${base.take(6)}): " + e.javaClass.simpleName) }
                 }
             }
-            val t2 = "$text"
+            val t2 = "Riyadh - $text ${temp}°"
             runOnUiThread {
                 if (ok) {
                     weatherFailed = false
-                    if (weatherText.text.toString() != t2) weatherText.text = t2
-                    lowTempText.text = "${low}°"
-                    highTempText.text = "${high}°"
+                    if (weatherText.text.toString() != t2) {
+                        weatherText.text = t2
+                        weatherText.setTextColor(Color.BLACK)
+                    }
                     weatherIcon.kind = kind
                 } else {
                     weatherFailed = true
                     val why = errs.joinToString("  /  ")
                     val cur = weatherText.text.toString()
-                    if (cur.endsWith("…") || cur.contains("unavailable")) weatherText.text = "weather error: $why"
+                    if (cur.endsWith("…") || cur.contains("unavailable")) {
+                        weatherText.text = "Riyadh - weather error: $why"
+                        weatherText.setTextColor(Color.BLACK)
+                    }
                 }
             }
         }.start()
@@ -2233,9 +2194,8 @@ class MainActivity : Activity() {
                 clockText.setTextColor(if (useBlackText) Color.argb(220, 0, 0, 0) else Color.argb(180, 255, 255, 255))
                 dateText.setTextColor(if (useBlackText) Color.argb(200, 0, 0, 0) else Color.argb(160, 255, 255, 255))
                 prayerText.setTextColor(if (useBlackText) Color.argb(220, 0, 0, 0) else PremiumColors.TEXT_PRIMARY)
-                weatherText.setTextColor(if (useBlackText) Color.argb(220, 0, 0, 0) else PremiumColors.TEXT_PRIMARY)
-                lowTempText.setTextColor(if (useBlackText) Color.argb(150, 0, 0, 0) else PremiumColors.TEXT_SECONDARY)
-                highTempText.setTextColor(if (useBlackText) Color.argb(150, 0, 0, 0) else PremiumColors.TEXT_SECONDARY)
+                // Weather text is always black now
+                weatherText.setTextColor(Color.BLACK)
             }
         } catch (e: Exception) {
             // Fallback to white if sampling fails
