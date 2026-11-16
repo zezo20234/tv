@@ -510,6 +510,7 @@ class MainActivity : Activity() {
     private val myBuild: Int by lazy { currentBuild() }
     private var lastWeather = -1L
     private var weatherFailed = false
+    private var lastInstalledVersion = 0
 
     // Prayer times
     private var prayerTimes: PrayerTimesData? = null
@@ -559,7 +560,11 @@ class MainActivity : Activity() {
                         startActivity(confirm)
                     }
                 }
-                PackageInstaller.STATUS_SUCCESS -> toast("Updated!")
+                PackageInstaller.STATUS_SUCCESS -> {
+                    toast("Updated!")
+                    // Mark this version as installed so we don't show update again
+                    prefs.edit().putInt("last_installed_version", latestBuild).apply()
+                }
                 else -> {
                     hideProgress()
                     toast("Update failed: " + (intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE) ?: "unknown"))
@@ -594,7 +599,7 @@ class MainActivity : Activity() {
             if (lastUpdateCheck < 0 || SystemClock.elapsedRealtime() - lastUpdateCheck > 6 * 60 * 60 * 1000L) {
                 lastUpdateCheck = SystemClock.elapsedRealtime()
                 Thread {
-                    if (fetchLatest() && latestBuild > myBuild) {
+                    if (fetchLatest() && isUpdateAvailable()) {
                         runOnUiThread { if (currentFocus?.parent !== inputsRow) refreshInputs(0) }
                     }
                 }.start()
@@ -675,7 +680,7 @@ class MainActivity : Activity() {
 
         // Auto-check for updates on launch
         Thread {
-            if (fetchLatest() && latestBuild > myBuild) {
+            if (fetchLatest() && isUpdateAvailable()) {
                 runOnUiThread {
                     showUpdateDialog()
                 }
@@ -719,18 +724,25 @@ class MainActivity : Activity() {
             setPadding(padH, u(40f), padH, 0)
         }
 
-        // Left side: Prayer times (next 2 prayers)
-        val leftSide = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        // Left side: Prayer times (next 2 prayers) - iPhone style with layered time
+        val leftSide = FrameLayout(this).apply {
             setPadding(u(20f), u(16f), u(20f), u(16f))
             background = GlassDrawable(u(24f).toFloat(),
                 withAlpha(PremiumColors.ACCENT_EMERALD, 25), withAlpha(PremiumColors.ACCENT_EMERALD, 12), 0.5f, true)
         }
-        prayerText = tv("Loading prayer times\u2026", 18f, PremiumColors.TEXT_PRIMARY, true)
-        leftSide.addView(prayerText)
-        prayerNextText = tv("", 16f, PremiumColors.ACCENT_EMERALD, true)
-        leftSide.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(8f) })
+        val prayerContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.START
+        }
+        // Prayer time (lower layer, larger)
+        prayerText = tv("Loading prayer times\u2026", 22f, PremiumColors.TEXT_PRIMARY, true)
+        prayerContainer.addView(prayerText)
+        // Countdown (upper layer, smaller, with transparency for lower z-index effect)
+        prayerNextText = tv("", 14f, PremiumColors.ACCENT_EMERALD, true).apply {
+            alpha = 0.85f
+        }
+        prayerContainer.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
+        leftSide.addView(prayerContainer, FrameLayout.LayoutParams(WRAP, WRAP))
         bar.addView(leftSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.START or Gravity.TOP))
 
         // Center: Large clock and date (iPhone liquid glass style)
@@ -938,17 +950,22 @@ class MainActivity : Activity() {
             val s1 = secondsUntil(a)
             val s2 = secondsUntil(b)
 
-            // Format duration helper
+            // Format duration with seconds - iPhone style
             fun formatDuration(seconds: Int): String {
+                val h = seconds / 3600
+                val m = (seconds % 3600) / 60
+                val s = seconds % 60
                 return when {
-                    seconds < 60 -> "${seconds}s"
-                    seconds < 3600 -> "${seconds / 60}m"
-                    else -> "${seconds / 3600}h ${seconds % 3600 / 60}m"
+                    h > 0 -> "${h}h ${m}m ${s}s"
+                    m > 0 -> "${m}m ${s}s"
+                    else -> "${s}s"
                 }
             }
 
-            prayerText.text = a.name + "  " + fmt12(a.hour, a.minute) + "  (${formatDuration(s1)})"
-            prayerNextText.text = b.name + "  " + fmt12(b.hour, b.minute) + "  (${formatDuration(s2)})"
+            // iPhone style: time below (larger), countdown above (smaller, lower z-index effect)
+            prayerText.text = fmt12(a.hour, a.minute)
+            prayerText.setTextSize(TypedValue.COMPLEX_UNIT_PX, u(22f).toFloat())
+            prayerNextText.text = "${a.name} in ${formatDuration(s1)}"
             prayerNextText.setTextColor(if (s1 < 15 * 60) PremiumColors.ACCENT_GOLD else PremiumColors.ACCENT_EMERALD)
 
             // Check if it's prayer time (within 1 minute)
@@ -958,6 +975,7 @@ class MainActivity : Activity() {
             }
         } else {
             prayerText.text = "Loading prayer times\u2026"
+            prayerText.setTextSize(TypedValue.COMPLEX_UNIT_PX, u(18f).toFloat())
             prayerNextText.text = ""
         }
     }
@@ -1393,6 +1411,14 @@ class MainActivity : Activity() {
         } catch (e: Exception) { false }
     }
 
+    // Check if update is available - compares against last installed version
+    private fun isUpdateAvailable(): Boolean {
+        val lastInstalled = prefs.getInt("last_installed_version", 0)
+        // If we haven't installed anything yet, use current build
+        val installedVersion = if (lastInstalled > 0) lastInstalled else myBuild
+        return latestBuild > installedVersion
+    }
+
     private fun showProgress(msg: String) {
         val existing = progressTv
         if (existing != null) { existing.text = msg; return }
@@ -1452,7 +1478,7 @@ class MainActivity : Activity() {
             runOnUiThread {
                 if (!ok || url == null) {
                     hideProgress(); toast("Couldn't reach GitHub. Check the internet and that the repo is public.")
-                } else if (latestBuild <= myBuild) {
+                } else if (!isUpdateAvailable()) {
                     hideProgress(); toast("You're up to date (build $myBuild).")
                 } else {
                     showProgress("Downloading build $latestBuild…  0%")
