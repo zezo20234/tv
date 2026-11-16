@@ -26,3 +26,7 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 }
+
+dependencies {
+    implementation("com.google.zxing:core:3.5.2")
+}

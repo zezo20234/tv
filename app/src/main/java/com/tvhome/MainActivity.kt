@@ -21,6 +21,7 @@ import android.media.tv.TvInputInfo
 import android.media.tv.TvInputManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -35,9 +36,17 @@ import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.WriterException
+import com.google.zxing.qrcode.QRCodeWriter
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.net.URL
 import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
@@ -472,7 +481,7 @@ class MainActivity : Activity() {
 
     private class AppEntry(val pkg: String, val cls: String, val label: String, val ri: ResolveInfo)
 
-    /** kind: 0 = app, 1 = HDMI input, 2 = settings */
+    /** kind: 0 = app, 1 = HDMI input, 2 = settings, 3 = update, 4 = find inputs, 5 = options, 6 = delete, 7 = reminders */
     private class Tile(
         val kind: Int, val title: String, val subtitle: String, val color: Int,
         val art: Bitmap?, val pkg: String = "", val cls: String = "", val n: Int = 0
@@ -523,6 +532,15 @@ class MainActivity : Activity() {
     private var prayerAlertView: FrameLayout? = null
     private var prayerAlertText: TextView? = null
 
+    // Reminders
+    private var reminders: MutableList<Reminder> = mutableListOf()
+    private lateinit var reminderText: TextView
+    private var reminderAlertView: FrameLayout? = null
+    private var reminderAlertText: TextView? = null
+    private var lastAlertedReminder = ""
+    private var httpServer: Thread? = null
+    private var serverPort = 8080
+
     // Prayer times data
     private data class PrayerTime(
         val name: String,
@@ -539,6 +557,16 @@ class MainActivity : Activity() {
         val isha: PrayerTime,
         val date: String,
         val hijri: String = ""
+    )
+
+    // Reminder data
+    private data class Reminder(
+        val id: String,
+        val name: String,
+        val hour: Int,
+        val minute: Int,
+        val recurrence: String, // "once", "daily", "weekly"
+        val alertMinutes: Int // Alert X minutes before
     )
 
     private val dateFmt = java.text.SimpleDateFormat("EEEE, MMMM d", java.util.Locale.US).apply {
@@ -582,6 +610,7 @@ class MainActivity : Activity() {
         override fun run() {
             updateClock()
             updatePrayerWidget()
+            updateReminderWidget()
 
             // Always retry weather every 1 minute if failed, otherwise every 15 minutes
             val weatherInterval = if (weatherFailed) 60_000L else 15 * 60 * 1000L
@@ -672,6 +701,21 @@ class MainActivity : Activity() {
         }
         root.addView(prayerAlertView, FrameLayout.LayoutParams(MATCH, MATCH))
 
+        // Reminder alert overlay (hidden by default)
+        reminderAlertText = tv("", 48f, Color.WHITE, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(u(40f), u(40f), u(40f), u(40f))
+        }
+        reminderAlertView = FrameLayout(this).apply {
+            background = GradientDrawable().apply { setColor(Color.argb(230, 245, 158, 11)) }
+            visibility = View.GONE
+            addView(reminderAlertText, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER))
+            setOnClickListener {
+                visibility = View.GONE
+            }
+        }
+        root.addView(reminderAlertView, FrameLayout.LayoutParams(MATCH, MATCH))
+
         setContentView(root)
 
         val f = IntentFilter(ACTION_INSTALL)
@@ -686,6 +730,12 @@ class MainActivity : Activity() {
                 }
             }
         }.start()
+
+        // Load reminders from storage
+        loadReminders()
+
+        // Start HTTP server for reminders
+        startHttpServer()
     }
 
     override fun onDestroy() {
@@ -724,25 +774,48 @@ class MainActivity : Activity() {
             setPadding(padH, u(40f), padH, 0)
         }
 
-        // Left side: Prayer times (next 2 prayers) - iPhone style with layered time
-        val leftSide = FrameLayout(this).apply {
+        // Left side: Prayer times + Reminders - iPhone style with layered time
+        val leftSide = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setPadding(u(20f), u(16f), u(20f), u(16f))
+        }
+
+        // Prayer times container
+        val prayerContainer = FrameLayout(this).apply {
             setPadding(u(20f), u(16f), u(20f), u(16f))
             background = GlassDrawable(u(24f).toFloat(),
                 withAlpha(PremiumColors.ACCENT_EMERALD, 25), withAlpha(PremiumColors.ACCENT_EMERALD, 12), 0.5f, true)
         }
-        val prayerContainer = LinearLayout(this).apply {
+        val prayerInner = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.START
         }
         // Prayer time (lower layer, larger)
         prayerText = tv("Loading prayer times\u2026", 22f, PremiumColors.TEXT_PRIMARY, true)
-        prayerContainer.addView(prayerText)
+        prayerInner.addView(prayerText)
         // Countdown (upper layer, smaller, with transparency for lower z-index effect)
         prayerNextText = tv("", 14f, PremiumColors.ACCENT_EMERALD, true).apply {
             alpha = 0.85f
         }
-        prayerContainer.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
-        leftSide.addView(prayerContainer, FrameLayout.LayoutParams(WRAP, WRAP))
+        prayerInner.addView(prayerNextText, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = u(4f) })
+        prayerContainer.addView(prayerInner, FrameLayout.LayoutParams(WRAP, WRAP))
+        leftSide.addView(prayerContainer, LinearLayout.LayoutParams(WRAP, WRAP).apply { rightMargin = u(12f) })
+
+        // Reminders container
+        val reminderContainer = FrameLayout(this).apply {
+            setPadding(u(20f), u(16f), u(20f), u(16f))
+            background = GlassDrawable(u(24f).toFloat(),
+                withAlpha(PremiumColors.ACCENT_GOLD, 25), withAlpha(PremiumColors.ACCENT_GOLD, 12), 0.5f, true)
+        }
+        val reminderInner = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.START
+        }
+        reminderText = tv("No reminders", 22f, PremiumColors.TEXT_PRIMARY, true)
+        reminderInner.addView(reminderText)
+        reminderContainer.addView(reminderInner, FrameLayout.LayoutParams(WRAP, WRAP))
+        leftSide.addView(reminderContainer, LinearLayout.LayoutParams(WRAP, WRAP))
         bar.addView(leftSide, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.START or Gravity.TOP))
 
         // Center: Large clock and date (iPhone liquid glass style)
@@ -987,6 +1060,388 @@ class MainActivity : Activity() {
         handler.postDelayed({
             prayerAlertView?.visibility = View.GONE
         }, 5000)
+    }
+
+    // ---------- reminders ----------
+
+    private fun loadReminders() {
+        try {
+            val json = prefs.getString("reminders", "[]")
+            val arr = org.json.JSONArray(json)
+            reminders.clear()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                reminders.add(Reminder(
+                    obj.getString("id"),
+                    obj.getString("name"),
+                    obj.getInt("hour"),
+                    obj.getInt("minute"),
+                    obj.getString("recurrence"),
+                    obj.getInt("alertMinutes")
+                ))
+            }
+        } catch (e: Exception) {
+            reminders.clear()
+        }
+    }
+
+    private fun saveReminders() {
+        try {
+            val arr = org.json.JSONArray()
+            for (r in reminders) {
+                val obj = org.json.JSONObject()
+                obj.put("id", r.id)
+                obj.put("name", r.name)
+                obj.put("hour", r.hour)
+                obj.put("minute", r.minute)
+                obj.put("recurrence", r.recurrence)
+                obj.put("alertMinutes", r.alertMinutes)
+                arr.put(obj)
+            }
+            prefs.edit().putString("reminders", arr.toString()).apply()
+        } catch (e: Exception) {}
+    }
+
+    private fun getLocalIp(): String {
+        try {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            val dhcp = wifi.dhcpInfo
+            val ip = dhcp.ipAddress
+            return String.format("%d.%d.%d.%d",
+                ip and 0xFF,
+                ip shr 8 and 0xFF,
+                ip shr 16 and 0xFF,
+                ip shr 24 and 0xFF
+            )
+        } catch (e: Exception) {
+            return "192.168.1.1"
+        }
+    }
+
+    private fun startHttpServer() {
+        httpServer = Thread {
+            try {
+                val serverSocket = ServerSocket(serverPort)
+                while (!Thread.currentThread().isInterrupted) {
+                    val client = serverSocket.accept()
+                    Thread {
+                        handleHttpRequest(client)
+                    }.start()
+                }
+            } catch (e: Exception) {
+                // Server failed to start
+            }
+        }
+        httpServer?.start()
+    }
+
+    private fun handleHttpRequest(client: Socket) {
+        try {
+            val reader = InputStreamReader(client.getInputStream())
+            val writer = OutputStreamWriter(client.getOutputStream())
+            val line = reader.readLine()
+
+            if (line != null && line.contains("GET")) {
+                val path = line.split(" ")[1]
+
+                when {
+                    path == "/" || path == "/index.html" -> {
+                        val html = buildHtml()
+                        writer.write("HTTP/1.1 200 OK\r\n")
+                        writer.write("Content-Type: text/html\r\n")
+                        writer.write("Content-Length: ${html.length}\r\n")
+                        writer.write("\r\n")
+                        writer.write(html)
+                    }
+                    path.startsWith("/api/reminders") -> {
+                        when {
+                            line.contains("POST") -> {
+                                // Add reminder
+                                val body = StringBuilder()
+                                while (reader.ready()) body.append(reader.read().toChar())
+                                val params = parseFormData(body.toString())
+                                val newReminder = Reminder(
+                                    id = System.currentTimeMillis().toString(),
+                                    name = params["name"] ?: "Untitled",
+                                    hour = params["hour"]?.toIntOrNull() ?: 12,
+                                    minute = params["minute"]?.toIntOrNull() ?: 0,
+                                    recurrence = params["recurrence"] ?: "once",
+                                    alertMinutes = params["alertMinutes"]?.toIntOrNull() ?: 5
+                                )
+                                reminders.add(newReminder)
+                                saveReminders()
+                                writer.write("HTTP/1.1 200 OK\r\n\r\nOK")
+                            }
+                            line.contains("DELETE") -> {
+                                // Delete reminder
+                                val id = path.substringAfterLast("/").substringBefore("?")
+                                reminders.removeIf { it.id == id }
+                                saveReminders()
+                                writer.write("HTTP/1.1 200 OK\r\n\r\nOK")
+                            }
+                            else -> {
+                                // Get reminders
+                                val arr = org.json.JSONArray()
+                                for (r in reminders) {
+                                    val obj = org.json.JSONObject()
+                                    obj.put("id", r.id)
+                                    obj.put("name", r.name)
+                                    obj.put("hour", r.hour)
+                                    obj.put("minute", r.minute)
+                                    obj.put("recurrence", r.recurrence)
+                                    obj.put("alertMinutes", r.alertMinutes)
+                                    arr.put(obj)
+                                }
+                                writer.write("HTTP/1.1 200 OK\r\n")
+                                writer.write("Content-Type: application/json\r\n")
+                                writer.write("\r\n")
+                                writer.write(arr.toString())
+                            }
+                        }
+                    }
+                    else -> {
+                        writer.write("HTTP/1.1 404 Not Found\r\n\r\n")
+                    }
+                }
+            }
+            writer.flush()
+            client.close()
+        } catch (e: Exception) {
+            try { client.close() } catch (e2: Exception) {}
+        }
+    }
+
+    private fun parseFormData(data: String): Map<String, String> {
+        val result = mutableMapOf<String, String>()
+        val pairs = data.split("&")
+        for (pair in pairs) {
+            val keyValue = pair.split("=")
+            if (keyValue.size == 2) {
+                result[keyValue[0]] = java.net.URLDecoder.decode(keyValue[1], "UTF-8")
+            }
+        }
+        return result
+    }
+
+    private fun buildHtml(): String {
+        val ip = getLocalIp()
+        return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>TV Reminders</title>
+                <style>
+                    body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #1a1d24; color: white; }
+                    h1 { color: #10b981; }
+                    .form-group { margin-bottom: 15px; }
+                    label { display: block; margin-bottom: 5px; }
+                    input, select { width: 100%; padding: 10px; border: none; border-radius: 5px; background: #2d3748; color: white; }
+                    button { background: #10b981; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
+                    button:hover { background: #059669; }
+                    .reminder { background: #2d3748; padding: 15px; margin: 10px 0; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
+                    .delete-btn { background: #ef4444; padding: 5px 10px; font-size: 12px; }
+                    .delete-btn:hover { background: #dc2626; }
+                </style>
+            </head>
+            <body>
+                <h1>TV Reminders</h1>
+                <p>Connected to: $ip:$serverPort</p>
+                <div class="form-group">
+                    <label>Reminder Name</label>
+                    <input type="text" id="name" placeholder="e.g., Meeting">
+                </div>
+                <div class="form-group">
+                    <label>Time</label>
+                    <input type="time" id="time">
+                </div>
+                <div class="form-group">
+                    <label>Recurrence</label>
+                    <select id="recurrence">
+                        <option value="once">Once</option>
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Alert Before (minutes)</label>
+                    <input type="number" id="alertMinutes" value="5" min="1">
+                </div>
+                <button onclick="addReminder()">Add Reminder</button>
+                <div id="reminders"></div>
+                <script>
+                    function loadReminders() {
+                        fetch('/api/reminders')
+                            .then(r => r.json())
+                            .then(data => {
+                                const div = document.getElementById('reminders');
+                                div.innerHTML = '';
+                                data.forEach(r => {
+                                    div.innerHTML += '<div class="reminder"><span>' + r.name + ' at ' + r.hour + ':' + String(r.minute).padStart(2, '0') + ' (' + r.recurrence + ')</span><button class="delete-btn" onclick="deleteReminder(\'' + r.id + '\')">Delete</button></div>';
+                                });
+                            });
+                    }
+                    function addReminder() {
+                        const name = document.getElementById('name').value;
+                        const time = document.getElementById('time').value;
+                        const recurrence = document.getElementById('recurrence').value;
+                        const alertMinutes = document.getElementById('alertMinutes').value;
+                        if (!name || !time) return alert('Please fill all fields');
+                        const [hour, minute] = time.split(':');
+                        const formData = new URLSearchParams();
+                        formData.append('name', name);
+                        formData.append('hour', hour);
+                        formData.append('minute', minute);
+                        formData.append('recurrence', recurrence);
+                        formData.append('alertMinutes', alertMinutes);
+                        fetch('/api/reminders', { method: 'POST', body: formData })
+                            .then(() => { document.getElementById('name').value = ''; loadReminders(); });
+                    }
+                    function deleteReminder(id) {
+                        fetch('/api/reminders/' + id, { method: 'DELETE' })
+                            .then(() => loadReminders());
+                    }
+                    loadReminders();
+                    setInterval(loadReminders, 5000);
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
+    }
+
+    private fun getNextReminder(): Reminder? {
+        val now = nowSeconds()
+        val calendar = java.util.Calendar.getInstance(riyadhTz)
+        val currentDay = calendar.get(java.util.Calendar.DAY_OF_WEEK)
+
+        val upcoming = reminders.filter { r ->
+            val reminderSeconds = r.hour * 3600 + r.minute * 60
+            when (r.recurrence) {
+                "daily" -> reminderSeconds > now
+                "weekly" -> {
+                    val targetDay = java.util.Calendar.getInstance(riyadhTz)
+                    targetDay.set(java.util.Calendar.HOUR_OF_DAY, r.hour)
+                    targetDay.set(java.util.Calendar.MINUTE, r.minute)
+                    targetDay.set(java.util.Calendar.SECOND, 0)
+                    while (targetDay.get(java.util.Calendar.DAY_OF_WEEK) != currentDay) {
+                        targetDay.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                    }
+                    val targetSeconds = targetDay.get(java.util.Calendar.HOUR_OF_DAY) * 3600 +
+                                       targetDay.get(java.util.Calendar.MINUTE) * 60
+                    targetSeconds > now
+                }
+                else -> reminderSeconds > now
+            }
+        }.sortedBy { it.hour * 3600 + it.minute * 60 }
+
+        return upcoming.firstOrNull()
+    }
+
+    private fun secondsUntilReminder(r: Reminder): Int {
+        val now = nowSeconds()
+        var diff = r.hour * 3600 + r.minute * 60 - now
+        if (diff <= 0) diff += 24 * 3600
+        return diff
+    }
+
+    private fun updateReminderWidget() {
+        val next = getNextReminder()
+        if (next != null) {
+            val seconds = secondsUntilReminder(next)
+            fun formatDuration(s: Int): String {
+                val h = s / 3600
+                val m = (s % 3600) / 60
+                val sec = s % 60
+                return when {
+                    h > 0 -> "${h}h ${m}m ${sec}s"
+                    m > 0 -> "${m}m ${sec}s"
+                    else -> "${sec}s"
+                }
+            }
+            reminderText.text = "${next.name} in ${formatDuration(seconds)}"
+
+            // Check if alert time reached
+            if (seconds <= next.alertMinutes * 60 && lastAlertedReminder != next.id) {
+                lastAlertedReminder = next.id
+                showReminderAlert(next.name)
+            }
+        } else {
+            reminderText.text = "No reminders"
+        }
+    }
+
+    private fun showReminderAlert(name: String) {
+        reminderAlertText?.text = "Reminder: $name"
+        reminderAlertView?.visibility = View.VISIBLE
+        handler.postDelayed({
+            reminderAlertView?.visibility = View.GONE
+        }, 5000)
+    }
+
+    private fun showRemindersDialog() {
+        val dlg = Dialog(this)
+        dlg.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(u(28f), u(24f), u(28f), u(24f))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat(); setColor(0xF01C1C24.toInt()); setStroke(max(1, u(1f)), 0x33FFFFFF)
+            }
+        }
+        panel.addView(tv("Reminders Web Interface", 24f, Color.WHITE, true))
+        panel.addView(tv("Scan QR code or visit the URL from your phone", 14f, 0x99FFFFFF.toInt()).apply {
+            setPadding(0, u(6f), 0, u(20f))
+        })
+
+        val ip = getLocalIp()
+        val url = "http://$ip:$serverPort"
+
+        panel.addView(tv(url, 18f, PremiumColors.ACCENT_EMERALD, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, u(16f))
+        })
+
+        // Generate QR code
+        try {
+            val qrBitmap = generateQRCode(url, u(200f).toInt())
+            val qrView = ImageView(this)
+            qrView.setImageBitmap(qrBitmap)
+            qrView.scaleType = ImageView.ScaleType.FIT_CENTER
+            panel.addView(qrView, LinearLayout.LayoutParams(u(200f), u(200f)).apply {
+                gravity = Gravity.CENTER
+            })
+        } catch (e: Exception) {
+            panel.addView(tv("QR code generation failed", 14f, 0x99FFFFFF.toInt()).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, u(16f), 0, 0)
+            })
+        }
+
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END; setPadding(0, u(18f), 0, 0)
+        }
+        buttons.addView(pill("Close", false) { dlg.dismiss() })
+        panel.addView(buttons, LinearLayout.LayoutParams(MATCH, WRAP))
+        dlg.setContentView(panel)
+        dlg.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setLayout(u(600f), WindowManager.LayoutParams.WRAP_CONTENT)
+            setDimAmount(0.65f)
+        }
+        dlg.show()
+    }
+
+    private fun generateQRCode(text: String, size: Int): Bitmap {
+        val writer = QRCodeWriter()
+        val bitMatrix = writer.encode(text, BarcodeFormat.QR_CODE, size, size)
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        for (x in 0 until size) {
+            for (y in 0 until size) {
+                bmp.setPixel(x, y, if (bitMatrix.get(x, y)) Color.BLACK else Color.WHITE)
+            }
+        }
+        return bmp
     }
 
     // ---------- weather ----------
@@ -1315,6 +1770,7 @@ class MainActivity : Activity() {
         inputTiles.add(Tile(3, "Update", sub, 0xFF1F6FEB.toInt(), null))
         inputTiles.add(Tile(6, "DELETE UI", "Uninstall TV Home app", 0xFFDC2626.toInt(), null))
         inputTiles.add(Tile(4, "Find inputs", "Find the app that switches your TV's HDMI inputs", 0xFF2F4A3C.toInt(), null))
+        inputTiles.add(Tile(7, "Reminders", "Open web interface to manage reminders", 0xFF10B981.toInt(), null))
 
         inputTiles.chunked(4).forEach { chunk ->
             inputsRow.addView(createGridRow(chunk))
@@ -1766,6 +2222,21 @@ class MainActivity : Activity() {
                 frame.addView(tv("DELETE UI", 15f, PremiumColors.TEXT_PRIMARY, true).apply { gravity = Gravity.CENTER },
                     FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
             }
+            7 -> {
+                // Reminders card
+                frame.background = GlassDrawable(r, withAlpha(PremiumColors.ACCENT_EMERALD, 170), Color.argb(130, 16, 185, 129), 0f, false)
+                val gs = (cardH * 0.42f).toInt()
+                val bell = TextView(this).apply {
+                    text = "🔔"
+                    setTextSize(TypedValue.COMPLEX_UNIT_PX, u(60f).toFloat())
+                    gravity = Gravity.CENTER
+                }
+                frame.addView(bell, FrameLayout.LayoutParams(gs, gs, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                    topMargin = (cardH * 0.12f).toInt()
+                })
+                frame.addView(tv("Reminders", 15f, PremiumColors.TEXT_PRIMARY, true).apply { gravity = Gravity.CENTER },
+                    FrameLayout.LayoutParams(MATCH, WRAP, Gravity.BOTTOM).apply { bottomMargin = u(10f) })
+            }
             else -> {
                 frame.background = GlassDrawable(r, withAlpha(PremiumColors.BACKGROUND_CARD, 110), withAlpha(PremiumColors.BACKGROUND_CHARCOAL, 70), 0f, false)
                 val gs = (cardH * 0.42f).toInt()
@@ -1823,6 +2294,7 @@ class MainActivity : Activity() {
                 4 -> startActivity(Intent(this, FinderActivity::class.java))
                 5 -> startActivity(Intent(this, SettingsActivity::class.java))
                 6 -> uninstallApp()
+                7 -> showRemindersDialog()
                 else -> openSettings()
             }
         }
